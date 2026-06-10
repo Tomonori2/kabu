@@ -95,7 +95,7 @@ def calc_profit(trades: list):
 
 
 # ---- ページ設定 ----
-st.set_page_config(page_title="株 損益アプリ", page_icon="assets/icon.png", layout="centered")
+st.set_page_config(page_title="株取引", page_icon="assets/icon.png", layout="centered")
 
 # スマホアプリ風の見た目調整
 st.markdown("""
@@ -155,7 +155,7 @@ div[data-testid="stImage"] img {
 </style>
 """, unsafe_allow_html=True)
 
-st.title("📈 株 取引損益アプリ")
+st.title("📈 株取引")
 
 tab_home, tab1, tab2, tab4, tab5 = st.tabs(["🏠 ホーム", "➕ 追加", "📋 履歴", "📊 保有", "📈 分析"])
 
