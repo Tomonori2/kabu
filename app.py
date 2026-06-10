@@ -95,7 +95,7 @@ def calc_profit(trades: list):
 
 
 # ---- ページ設定 ----
-st.set_page_config(page_title="株 損益アプリ", page_icon="📈", layout="centered")
+st.set_page_config(page_title="株 損益アプリ", page_icon="assets/icon.png", layout="centered")
 
 # スマホアプリ風の見た目調整
 st.markdown("""
