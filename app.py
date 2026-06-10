@@ -77,9 +77,62 @@ def calc_profit(trades: list) -> dict:
 
 # ---- ページ設定 ----
 st.set_page_config(page_title="株 損益アプリ", page_icon="📈", layout="centered")
+
+# スマホアプリ風の見た目調整
+st.markdown("""
+<style>
+/* Streamlitのメニュー・フッターを隠してアプリらしく */
+#MainMenu, footer, header {visibility: hidden;}
+
+/* 余白を詰めて画面を広く使う */
+.block-container {padding-top: 1.2rem; padding-bottom: 4rem; padding-left: 1rem; padding-right: 1rem;}
+
+/* タブをボトムナビ風に大きく・押しやすく */
+.stTabs [data-baseweb="tab-list"] {
+    gap: 4px;
+    position: sticky;
+    top: 0;
+    background: #ffffff;
+    z-index: 99;
+    border-radius: 0 0 12px 12px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+}
+.stTabs [data-baseweb="tab"] {
+    font-size: 15px;
+    font-weight: 600;
+    padding: 10px 6px;
+    flex: 1;
+}
+
+/* ボタンを指で押しやすい大きさに */
+.stForm button, .stButton button {
+    height: 3.2rem;
+    font-size: 17px;
+    font-weight: 700;
+    border-radius: 14px;
+}
+
+/* 入力欄も大きめに */
+.stTextInput input, .stNumberInput input {
+    font-size: 16px;
+    height: 2.8rem;
+    border-radius: 12px;
+}
+
+/* メトリクスをカード風に */
+div[data-testid="stMetric"] {
+    background: #f7faf7;
+    border: 1px solid #e3ece3;
+    border-radius: 16px;
+    padding: 14px 18px;
+    margin-bottom: 10px;
+}
+</style>
+""", unsafe_allow_html=True)
+
 st.title("📈 株 取引損益アプリ")
 
-tab1, tab2, tab3, tab4 = st.tabs(["➕ 取引追加", "📋 取引履歴", "💰 損益", "📊 保有状況"])
+tab1, tab2, tab3, tab4 = st.tabs(["➕ 追加", "📋 履歴", "💰 損益", "📊 保有"])
 
 # ---- タブ1: 取引追加 ----
 with tab1:
@@ -109,7 +162,7 @@ with tab2:
         rows = [
             {"日付": t["date"], "銘柄": t["name"], "売買": t["baibai"],
              "株数": t["shares"], "単価（円）": f'{t["price"]:,}'}
-            for t in trades
+            for t in reversed(trades)  # 新しい取引を上に表示
         ]
         st.dataframe(rows, use_container_width=True, hide_index=True)
 
