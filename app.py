@@ -140,18 +140,81 @@ st.markdown("""
 
 /* メトリクスをカード風に */
 div[data-testid="stMetric"] {
-    background: #f7faf7;
-    border: 1px solid #e3ece3;
+    background: #f4fafd;
+    border: 1px solid #dcedf6;
     border-radius: 16px;
     padding: 14px 18px;
     margin-bottom: 10px;
+}
+
+/* ヒーロー画像を角丸カードに */
+div[data-testid="stImage"] img {
+    border-radius: 18px;
+    box-shadow: 0 4px 14px rgba(14,165,233,0.25);
 }
 </style>
 """, unsafe_allow_html=True)
 
 st.title("📈 株 取引損益アプリ")
 
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["➕ 追加", "📋 履歴", "💰 損益", "📊 保有", "📈 分析"])
+tab_home, tab1, tab2, tab4, tab5 = st.tabs(["🏠 ホーム", "➕ 追加", "📋 履歴", "📊 保有", "📈 分析"])
+
+# ---- タブ: ホーム（ダッシュボード）----
+with tab_home:
+    st.image("assets/hero.jpg", use_container_width=True)
+    trades = load_trades()
+    if not trades:
+        st.info("ようこそ！「➕ 追加」タブから最初の取引を記録してみましょう。")
+    else:
+        holdings, realized = calc_profit(trades)
+        total = round(sum(h["profit"] for h in holdings.values()))
+        mochikabu = [(n, h) for n, h in holdings.items() if h["shares"] > 0]
+
+        # 含み損益（証券コード登録済みの保有銘柄のみ）
+        codes = {t["name"]: str(t["code"]) for t in trades if t.get("code")}
+        fukumi_total = 0.0
+        has_price = False
+        for stock_name, h in mochikabu:
+            stock_code = codes.get(stock_name)
+            now = fetch_price(stock_code) if stock_code else None
+            if now is not None:
+                fukumi_total += (now - h["cost"] / h["shares"]) * h["shares"]
+                has_price = True
+
+        c1, c2 = st.columns(2)
+        c1.metric("実現損益（確定分）", f"{total:+,}円")
+        c2.metric(
+            "含み損益（保有分）",
+            f"{fukumi_total:+,.0f}円" if has_price else "—",
+        )
+        if not has_price and mochikabu:
+            st.caption("※ 含み損益は、取引追加で証券コードを入力した銘柄に表示されます")
+
+        if total > 0:
+            tax = round(total * TAX_RATE)
+            st.caption(f"実現損益から税金（{TAX_RATE * 100:.3f}%）を引いた手取りは ＋{total - tax:,}円")
+
+        c1, c2 = st.columns(2)
+        c1.metric("保有銘柄", f"{len(mochikabu)}銘柄")
+        c2.metric("取引回数", f"{len(trades)}回")
+
+        # ---- 銘柄別の実現損益 ----
+        kakutei = [(n, h) for n, h in holdings.items() if round(h["profit"]) != 0]
+        if kakutei:
+            st.divider()
+            st.markdown("##### 💰 銘柄別の実現損益")
+            for stock_name, h in kakutei:
+                profit = round(h["profit"])
+                st.metric(label=stock_name, value=f"{profit:+,}円")
+
+        # ---- 最近の取引 ----
+        st.divider()
+        st.markdown("##### 🕒 最近の取引")
+        for t in list(reversed(trades))[:3]:
+            st.markdown(
+                f'- {t["date"]}　**{t["name"]}**　{t["baibai"]}　'
+                f'{t["shares"]}株 ／ {t["price"]:,}円'
+            )
 
 # ---- タブ1: 取引追加 ----
 with tab1:
@@ -195,38 +258,6 @@ with tab2:
             for t in reversed(trades)  # 新しい取引を上に表示
         ]
         st.dataframe(rows, use_container_width=True, hide_index=True)
-
-# ---- タブ3: 損益 ----
-with tab3:
-    st.subheader("損益（実現損益）")
-    trades = load_trades()
-    if not trades:
-        st.info("まだ取引がありません。")
-    else:
-        holdings, _ = calc_profit(trades)
-        total = 0
-        for stock_name, h in holdings.items():
-            profit = round(h["profit"])
-            total += profit
-            mark = "＋" if profit >= 0 else "－"
-            delta_color = "normal" if profit >= 0 else "inverse"
-            st.metric(
-                label=stock_name,
-                value=f"{mark}{abs(profit):,}円",
-                delta_color=delta_color,
-            )
-
-        st.divider()
-        total_mark = "＋" if total >= 0 else "－"
-        st.markdown(f"**合計損益（税引き前）: {total_mark}{abs(round(total)):,}円**")
-
-        if total > 0:
-            tax = round(total * TAX_RATE)
-            tedori = total - tax
-            st.markdown(f"税金（{TAX_RATE * 100:.3f}%）: －{tax:,}円")
-            st.success(f"手取り（税引き後）: ＋{tedori:,}円")
-        else:
-            st.info("損失のため、税金はかかりません。")
 
 # ---- タブ4: 保有状況 ----
 with tab4:
