@@ -2,6 +2,7 @@
 import os
 from datetime import date
 
+import pandas as pd
 import streamlit as st
 from supabase import create_client, Client
 
@@ -50,8 +51,9 @@ def save_trade(name: str, baibai: str, shares: int, price: int):
     }).execute()
 
 
-def calc_profit(trades: list) -> dict:
+def calc_profit(trades: list):
     holdings = {}
+    realized = []  # 売却1回ごとの実現損益（分析用）
     for t in trades:
         name = t["name"]
         baibai = t["baibai"]
@@ -68,11 +70,13 @@ def calc_profit(trades: list) -> dict:
         else:
             if h["shares"] >= shares:
                 avg = h["cost"] / h["shares"]
-                h["profit"] += (price - avg) * shares
+                profit = (price - avg) * shares
+                h["profit"] += profit
                 h["cost"] -= avg * shares
                 h["shares"] -= shares
+                realized.append({"date": str(t["date"]), "name": name, "profit": profit})
 
-    return holdings
+    return holdings, realized
 
 
 # ---- ページ設定 ----
@@ -132,7 +136,7 @@ div[data-testid="stMetric"] {
 
 st.title("📈 株 取引損益アプリ")
 
-tab1, tab2, tab3, tab4 = st.tabs(["➕ 追加", "📋 履歴", "💰 損益", "📊 保有"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["➕ 追加", "📋 履歴", "💰 損益", "📊 保有", "📈 分析"])
 
 # ---- タブ1: 取引追加 ----
 with tab1:
@@ -173,7 +177,7 @@ with tab3:
     if not trades:
         st.info("まだ取引がありません。")
     else:
-        holdings = calc_profit(trades)
+        holdings, _ = calc_profit(trades)
         total = 0
         for stock_name, h in holdings.items():
             profit = round(h["profit"])
@@ -202,7 +206,7 @@ with tab3:
 with tab4:
     st.subheader("保有状況")
     trades = load_trades()
-    holdings = calc_profit(trades)
+    holdings, _ = calc_profit(trades)
     mochikabu = [(n, h) for n, h in holdings.items() if h["shares"] > 0]
 
     if not mochikabu:
@@ -216,3 +220,74 @@ with tab4:
                 delta=f"平均取得単価 {avg:,}円",
                 delta_color="off",
             )
+
+# ---- タブ5: 分析 ----
+with tab5:
+    st.subheader("傾向分析")
+    trades = load_trades()
+    if not trades:
+        st.info("まだ取引がありません。")
+    else:
+        holdings, realized = calc_profit(trades)
+
+        if not realized:
+            st.info("売却した取引がまだないため、損益の分析は表示できません。株を売却すると、ここに勝率や傾向が表示されます。")
+        else:
+            df = pd.DataFrame(realized)
+            df["月"] = df["date"].str[:7]
+
+            # ---- 成績サマリー ----
+            total_count = len(df)
+            win_df = df[df["profit"] > 0]
+            lose_df = df[df["profit"] <= 0]
+            win_rate = len(win_df) / total_count * 100
+
+            c1, c2, c3 = st.columns(3)
+            c1.metric("売却回数", f"{total_count}回")
+            c2.metric("勝率", f"{win_rate:.0f}%")
+            c3.metric("合計損益", f'{df["profit"].sum():,.0f}円')
+
+            c1, c2 = st.columns(2)
+            avg_win = win_df["profit"].mean() if len(win_df) else 0
+            avg_lose = lose_df["profit"].mean() if len(lose_df) else 0
+            c1.metric("勝ちの平均", f"＋{avg_win:,.0f}円")
+            c2.metric("負けの平均", f"{avg_lose:,.0f}円")
+
+            # ---- ひとことコメント ----
+            by_name = df.groupby("name")["profit"].sum()
+            best_name = by_name.idxmax()
+            worst_name = by_name.idxmin()
+            comments = []
+            if by_name[best_name] > 0:
+                comments.append(f"🏆 得意な銘柄は **{best_name}**（＋{by_name[best_name]:,.0f}円）")
+            if by_name[worst_name] < 0:
+                comments.append(f"⚠️ 苦手な銘柄は **{worst_name}**（{by_name[worst_name]:,.0f}円）")
+            if len(lose_df) and avg_win and abs(avg_lose) > avg_win:
+                comments.append("📉 負けたときの損失が、勝ったときの利益より大きい傾向があります（損切りは早めが鉄則）")
+            for c in comments:
+                st.markdown(c)
+
+            st.divider()
+
+            # ---- 累計損益の推移 ----
+            st.markdown("##### 📈 累計損益の推移")
+            cum = df.groupby("date")["profit"].sum().sort_index().cumsum()
+            cum.index.name = "日付"
+            st.line_chart(cum, use_container_width=True)
+
+            # ---- 月別の実現損益 ----
+            st.markdown("##### 🗓 月別の損益")
+            monthly = df.groupby("月")["profit"].sum()
+            st.bar_chart(monthly, use_container_width=True)
+
+            # ---- 銘柄別の実現損益 ----
+            st.markdown("##### 🏷 銘柄別の損益")
+            st.bar_chart(by_name.sort_values(ascending=False), use_container_width=True)
+
+        # ---- 月別の取引回数（買い・売り別）----
+        st.markdown("##### 🔁 月別の取引回数")
+        df_all = pd.DataFrame(trades)
+        df_all["月"] = df_all["date"].astype(str).str[:7]
+        counts = df_all.groupby(["月", "baibai"]).size().unstack(fill_value=0)
+        counts = counts.rename(columns={"買": "買い", "売": "売り"})
+        st.bar_chart(counts, use_container_width=True)
