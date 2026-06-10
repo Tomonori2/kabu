@@ -5,14 +5,32 @@ from datetime import date
 import streamlit as st
 from supabase import create_client, Client
 
-SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
-SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
 TAX_RATE = 0.20315
+
+
+def get_config(key: str) -> str:
+    # 環境変数 → .streamlit/secrets.toml の順に探す
+    value = os.environ.get(key, "")
+    if not value:
+        try:
+            value = st.secrets[key]
+        except (KeyError, FileNotFoundError):
+            value = ""
+    return value
 
 
 @st.cache_resource
 def get_supabase() -> Client:
-    return create_client(SUPABASE_URL, SUPABASE_KEY)
+    url = get_config("SUPABASE_URL")
+    key = get_config("SUPABASE_KEY")
+    if not url or not key:
+        st.error(
+            "Supabase の接続情報が設定されていません。\n\n"
+            "環境変数 `SUPABASE_URL` と `SUPABASE_KEY` を設定するか、"
+            "`.streamlit/secrets.toml` に記載してください（README 参照）。"
+        )
+        st.stop()
+    return create_client(url, key)
 
 
 def load_trades():
