@@ -24,6 +24,18 @@
 - Supabaseのダッシュボードを見るときは**ブラウザの翻訳機能をオフ**にする（オンだと画面が壊れる）
 - データの中身は Supabase の Table Editor からも直接見られる
 
+## ⚠️ 現在株価機能を使うための作業（1回だけ）
+
+`trades` テーブルに `code` 列を追加する必要がある:
+
+1. Table Editor を開く: https://supabase.com/dashboard/project/nnsctxvscnkbctylxrxs/editor
+2. 左のリストの `trades` の横の「…」→「**Edit table**」
+3. Columns の一番下の「**Add column**」→ Name: `code` ／ Type: `text`
+4. 「**Save**」
+
+これをやると、取引追加のときに証券コード（例: トヨタ=7203）を入力でき、
+保有状況タブに現在株価と含み損益が表示される。
+
 ## 今後のアイデア（やりたくなったら）
 
 - 取引の編集・削除機能（誤入力の修正）
