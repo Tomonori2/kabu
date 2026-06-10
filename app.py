@@ -4,6 +4,7 @@ from datetime import date
 
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 import yfinance as yf
 from supabase import create_client, Client
 
@@ -96,6 +97,25 @@ def calc_profit(trades: list):
 
 # ---- ページ設定 ----
 st.set_page_config(page_title="株取引", page_icon="assets/icon.png", layout="centered")
+
+# ファビコンとホーム画面用アイコンを固定URLのアイコンに差し替える
+# （page_iconだけでは「ホーム画面に追加」のアイコンが変わらないため）
+components.html("""
+<script>
+const doc = window.parent.document;
+doc.querySelectorAll("link[rel*='icon'], link[rel='manifest']").forEach(e => e.remove());
+const icon = doc.createElement('link');
+icon.rel = 'icon';
+icon.type = 'image/png';
+icon.sizes = '512x512';
+icon.href = './app/static/icon.png';
+doc.head.appendChild(icon);
+const apple = doc.createElement('link');
+apple.rel = 'apple-touch-icon';
+apple.href = './app/static/icon.png';
+doc.head.appendChild(apple);
+</script>
+""", height=0)
 
 # スマホアプリ風の見た目調整
 st.markdown("""
