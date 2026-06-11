@@ -537,6 +537,7 @@ with tab5:
 SENSEI_AVATAR = "assets/sensei.png" if os.path.exists("assets/sensei.png") else "👨‍🏫"
 
 with tab_ai:
+    st.image("assets/sensei_hero.jpg", use_container_width=True)
     st.subheader("👨‍🏫 高坂先生のAI株式分析")
     trades = load_trades()
     codes = {t["name"]: str(t["code"]) for t in trades if t.get("code")}
