@@ -41,10 +41,10 @@ def load_trades():
     return result.data
 
 
-def save_trade(name: str, code: str, baibai: str, shares: int, price: int):
+def save_trade(trade_date: str, name: str, code: str, baibai: str, shares: int, price: int):
     sb = get_supabase()
     row = {
-        "date": date.today().isoformat(),
+        "date": trade_date,
         "name": name,
         "baibai": baibai,
         "shares": shares,
@@ -330,6 +330,7 @@ with tab_home:
 with tab1:
     st.subheader("取引を追加する")
     with st.form("add_trade"):
+        trade_date = st.date_input("日付", value=date.today())
         name = st.text_input("銘柄名（例: トヨタ）")
         code = st.text_input(
             "証券コード（任意・例: 7203）",
@@ -345,8 +346,8 @@ with tab1:
             st.error("銘柄名を入力してください。")
         else:
             try:
-                save_trade(name.strip(), code.strip(), baibai, int(shares), int(price))
-                st.success(f"記録しました: {name} / {baibai} / {int(shares)}株 / {int(price):,}円")
+                save_trade(trade_date.isoformat(), name.strip(), code.strip(), baibai, int(shares), int(price))
+                st.success(f"記録しました: {trade_date} / {name} / {baibai} / {int(shares)}株 / {int(price):,}円")
                 st.cache_resource.clear()
             except Exception:
                 st.error(
