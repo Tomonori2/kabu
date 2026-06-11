@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import os
+import time
 from datetime import date
 
 import pandas as pd
@@ -144,22 +145,25 @@ def gemini_generate(messages: list) -> str:
     )
 
     last_err = None
-    for make_client in factories:
-        try:
-            client = make_client()
-        except Exception as e:
-            last_err = e
-            continue
-        for model in ["gemini-2.5-pro", "gemini-2.5-flash"]:
-            for config in (search_config, None):
-                try:
-                    resp = client.models.generate_content(
-                        model=model, contents=contents, config=config
-                    )
-                    if resp.text:
-                        return resp.text
-                except Exception as e:
-                    last_err = e
+    for attempt in range(2):  # 混雑時は少し待って全体をもう一周
+        for make_client in factories:
+            try:
+                client = make_client()
+            except Exception as e:
+                last_err = e
+                continue
+            for model in ["gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.0-flash", "gemini-flash-latest"]:
+                for config in (search_config, None):
+                    try:
+                        resp = client.models.generate_content(
+                            model=model, contents=contents, config=config
+                        )
+                        if resp.text:
+                            return resp.text
+                    except Exception as e:
+                        last_err = e
+        if attempt == 0:
+            time.sleep(4)
     raise last_err
 
 
