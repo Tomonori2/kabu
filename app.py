@@ -97,54 +97,69 @@ def get_stock_summary(code: str) -> str:
             lines.append(f"PER（株価収益率）: {info['trailingPE']:.1f}倍")
         if info.get("dividendYield"):
             lines.append(f"配当利回り（生データ）: {info['dividendYield']}")
+        # 決算データ（売上高・純利益の推移）
+        fin = t.financials
+        if fin is not None and not fin.empty:
+            for label, key in [("売上高", "Total Revenue"), ("純利益", "Net Income")]:
+                if key in fin.index:
+                    vals = []
+                    for col in list(fin.columns)[:3][::-1]:
+                        v = fin.loc[key, col]
+                        if pd.notna(v):
+                            vals.append(f"{col.year}年: {v / 1e8:,.0f}億円")
+                    if vals:
+                        lines.append(f"{label}の推移: " + " → ".join(vals))
     except Exception:
         pass
     return "\n".join(lines) if lines else "（株価データは取得できませんでした）"
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
-def ai_analyze(stock_name: str, code: str, stock_data: str, position: str) -> str:
-    """Geminiに会社の分析をしてもらう"""
+def gemini_generate(messages: list) -> str:
+    """会話履歴を渡してGeminiに回答してもらう。
+
+    賢い順にモデルを試し、Google検索つき → なしの順でフォールバックする。
+    キーの形式（AIza / AQ.）による接続方式の違いも自動で吸収する。
+    """
     from google import genai
+    from google.genai import types
+
     api_key = get_config("GEMINI_API_KEY").strip()
-    # キーの形式によって接続方式が違うため、両方の方式を自動で試す
-    clients = [
+    factories = [
         lambda: genai.Client(api_key=api_key),
         lambda: genai.Client(vertexai=True, api_key=api_key),
     ]
     if api_key.startswith("AQ."):
-        clients.reverse()  # AQ.形式はVertex方式を先に試す
-    prompt = f"""あなたは親しみやすい株式投資の先生です。投資初心者にもわかる日本語で、以下の会社を分析してください。
+        factories.reverse()  # AQ.形式はVertex方式を先に試す
 
-会社名: {stock_name}（証券コード: {code or "不明"}）
+    contents = [
+        types.Content(
+            role="user" if m["role"] == "user" else "model",
+            parts=[types.Part.from_text(text=m["text"])],
+        )
+        for m in messages
+    ]
+    # Google検索を使える設定（最新ニュースを反映できる）
+    search_config = types.GenerateContentConfig(
+        tools=[types.Tool(google_search=types.GoogleSearch())]
+    )
 
-【株価・会社データ】
-{stock_data}
-
-【この人の保有・取引状況】
-{position}
-
-以下の構成で、マークダウンで簡潔に書いてください（全体で500字程度）:
-1. **どんな会社？** — 事業内容を2〜3行で
-2. **最近の株価** — 上のデータをもとに動きを説明
-3. **あなたの持ち高との関係** — 保有がある場合、平均取得単価と現在の状況を踏まえて
-4. **注目ポイント** — 良い材料とリスクを1つずつ
-
-最後に「※これは参考情報です。投資の判断はご自身で行ってください。」と添えてください。"""
-    # 接続方式×モデル名の組み合わせを順番に試す
     last_err = None
-    for make_client in clients:
+    for make_client in factories:
         try:
             client = make_client()
         except Exception as e:
             last_err = e
             continue
-        for model in ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]:
-            try:
-                resp = client.models.generate_content(model=model, contents=prompt)
-                return resp.text
-            except Exception as e:
-                last_err = e
+        for model in ["gemini-2.5-pro", "gemini-2.5-flash"]:
+            for config in (search_config, None):
+                try:
+                    resp = client.models.generate_content(
+                        model=model, contents=contents, config=config
+                    )
+                    if resp.text:
+                        return resp.text
+                except Exception as e:
+                    last_err = e
     raise last_err
 
 
@@ -513,9 +528,11 @@ with tab5:
         counts = counts.rename(columns={"買": "買い", "売": "売り"})
         st.bar_chart(counts, use_container_width=True)
 
-# ---- タブ: AI分析 ----
+# ---- タブ: AI分析（高坂先生）----
+SENSEI_AVATAR = "assets/sensei.png" if os.path.exists("assets/sensei.png") else "👨‍🏫"
+
 with tab_ai:
-    st.subheader("🤖 AIに会社を分析してもらう")
+    st.subheader("👨‍🏫 高坂先生のAI株式分析")
     trades = load_trades()
     codes = {t["name"]: str(t["code"]) for t in trades if t.get("code")}
     names = list(dict.fromkeys(t["name"] for t in trades))
@@ -533,7 +550,7 @@ with tab_ai:
     target_name = manual_name.strip() or pick
     target_code = manual_code.strip() or (codes.get(pick, "") if pick else "")
 
-    if st.button("🤖 分析する", use_container_width=True, type="primary"):
+    if st.button("👨‍🏫 高坂先生に分析してもらう", use_container_width=True, type="primary"):
         if not get_config("GEMINI_API_KEY"):
             st.error(
                 "Geminiの設定がまだです。share.streamlit.io でこのアプリの "
@@ -556,11 +573,59 @@ with tab_ai:
                 if parts:
                     position = "。".join(parts) + "。"
 
-            with st.spinner("AIが分析中です…（10秒ほどかかります）"):
-                stock_data = get_stock_summary(target_code) if target_code else "（証券コード未登録のため株価データなし）"
+            stock_data = get_stock_summary(target_code) if target_code else "（証券コード未登録のため株価データなし）"
+            prompt = f"""あなたは「高坂先生」。親しみやすく頼れる株式投資の先生です。投資初心者にもわかる日本語で、以下の会社を分析してください。
+可能であればGoogle検索で最新のニュースや決算情報も確認して、分析に反映してください。
+
+会社名: {target_name}（証券コード: {target_code or "不明"}）
+
+【株価・会社データ】
+{stock_data}
+
+【この生徒の保有・取引状況】
+{position}
+
+以下の構成で、マークダウンで簡潔に書いてください（全体で600字程度）:
+1. **どんな会社？** — 事業内容を2〜3行で
+2. **業績と株価** — 売上・利益の推移と最近の株価の動き
+3. **最新の話題** — 検索で見つかった直近のニュースがあれば
+4. **あなたの持ち高との関係** — 保有がある場合、平均取得単価と現在の状況を踏まえて
+5. **注目ポイント** — 良い材料とリスクを1つずつ
+
+最後に「※これは参考情報です。投資の判断はご自身で行ってください。」と添えてください。
+このあと生徒から追加の質問が来たら、高坂先生として同じ調子で会話を続けてください。"""
+
+            st.session_state.ai_messages = [{"role": "user", "text": prompt, "hidden": True}]
+            with st.spinner("高坂先生が分析中です…（高性能モードのため30秒ほどかかることがあります）"):
                 try:
-                    result = ai_analyze(target_name, target_code, stock_data, position)
-                    st.markdown(result)
+                    answer = gemini_generate(st.session_state.ai_messages)
+                    st.session_state.ai_messages.append({"role": "model", "text": answer})
                 except Exception as e:
+                    st.session_state.ai_messages = []
                     st.error("AIの呼び出しに失敗しました。下のエラー内容を確認してください。")
                     st.code(str(e))
+
+    # ---- 会話の表示 ----
+    for m in st.session_state.get("ai_messages", []):
+        if m.get("hidden"):
+            continue
+        if m["role"] == "model":
+            with st.chat_message("ai", avatar=SENSEI_AVATAR):
+                st.markdown(m["text"])
+        else:
+            with st.chat_message("user"):
+                st.markdown(m["text"])
+
+    # ---- 追い質問（チャット）----
+    if st.session_state.get("ai_messages"):
+        question = st.chat_input("高坂先生に追い質問する（例: リスクをもっと詳しく）")
+        if question:
+            st.session_state.ai_messages.append({"role": "user", "text": question})
+            with st.spinner("高坂先生が考え中…"):
+                try:
+                    answer = gemini_generate(st.session_state.ai_messages)
+                    st.session_state.ai_messages.append({"role": "model", "text": answer})
+                except Exception as e:
+                    st.error("AIの呼び出しに失敗しました。")
+                    st.code(str(e))
+            st.rerun()
