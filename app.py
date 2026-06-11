@@ -106,7 +106,13 @@ def get_stock_summary(code: str) -> str:
 def ai_analyze(stock_name: str, code: str, stock_data: str, position: str) -> str:
     """Geminiに会社の分析をしてもらう"""
     from google import genai
-    client = genai.Client(api_key=get_config("GEMINI_API_KEY").strip())
+    api_key = get_config("GEMINI_API_KEY").strip()
+    if api_key.startswith("AQ."):
+        # Vertex AI エクスプレスモードのキー（AQ.で始まる）
+        client = genai.Client(vertexai=True, api_key=api_key)
+    else:
+        # Google AI Studio のキー（AIzaで始まる）
+        client = genai.Client(api_key=api_key)
     prompt = f"""あなたは親しみやすい株式投資の先生です。投資初心者にもわかる日本語で、以下の会社を分析してください。
 
 会社名: {stock_name}（証券コード: {code or "不明"}）
