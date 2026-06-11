@@ -72,6 +72,62 @@ def delete_trade(trade_id):
     sb.table("trades").delete().eq("id", trade_id).execute()
 
 
+def get_stock_summary(code: str) -> str:
+    """yfinanceから会社の基本データを集めて、AIに渡す文章にする"""
+    lines = []
+    try:
+        t = yf.Ticker(f"{code}.T")
+        hist = t.history(period="1y")
+        if not hist.empty:
+            now = hist["Close"].iloc[-1]
+            lines.append(f"現在株価: {now:,.0f}円")
+            for label, days in [("1か月前", 21), ("半年前", 126), ("1年前", 248)]:
+                if len(hist) > days:
+                    past = hist["Close"].iloc[-days - 1]
+                    lines.append(f"{label}と比べた株価: {(now / past - 1) * 100:+.1f}%")
+            lines.append(f"直近1年の高値: {hist['High'].max():,.0f}円 ／ 安値: {hist['Low'].min():,.0f}円")
+        info = t.info or {}
+        if info.get("longName"):
+            lines.append(f"会社名: {info['longName']}")
+        if info.get("sector"):
+            lines.append(f"業種: {info['sector']}")
+        if info.get("marketCap"):
+            lines.append(f"時価総額: 約{info['marketCap'] / 1e8:,.0f}億円")
+        if info.get("trailingPE"):
+            lines.append(f"PER（株価収益率）: {info['trailingPE']:.1f}倍")
+        if info.get("dividendYield"):
+            lines.append(f"配当利回り（生データ）: {info['dividendYield']}")
+    except Exception:
+        pass
+    return "\n".join(lines) if lines else "（株価データは取得できませんでした）"
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def ai_analyze(stock_name: str, code: str, stock_data: str, position: str) -> str:
+    """Geminiに会社の分析をしてもらう"""
+    from google import genai
+    client = genai.Client(api_key=get_config("GEMINI_API_KEY"))
+    prompt = f"""あなたは親しみやすい株式投資の先生です。投資初心者にもわかる日本語で、以下の会社を分析してください。
+
+会社名: {stock_name}（証券コード: {code or "不明"}）
+
+【株価・会社データ】
+{stock_data}
+
+【この人の保有・取引状況】
+{position}
+
+以下の構成で、マークダウンで簡潔に書いてください（全体で500字程度）:
+1. **どんな会社？** — 事業内容を2〜3行で
+2. **最近の株価** — 上のデータをもとに動きを説明
+3. **あなたの持ち高との関係** — 保有がある場合、平均取得単価と現在の状況を踏まえて
+4. **注目ポイント** — 良い材料とリスクを1つずつ
+
+最後に「※これは参考情報です。投資の判断はご自身で行ってください。」と添えてください。"""
+    resp = client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
+    return resp.text
+
+
 @st.cache_data(ttl=300)
 def fetch_price(code: str):
     """東証の現在株価を取得する（約20分遅れの参考値）。取得できなければ None"""
@@ -174,7 +230,9 @@ div[data-testid="stImage"] img {
 
 st.title("📈 株取引")
 
-tab_home, tab1, tab2, tab4, tab5 = st.tabs(["🏠 ホーム", "➕ 追加", "📋 履歴", "📊 保有", "📈 分析"])
+tab_home, tab1, tab2, tab4, tab5, tab_ai = st.tabs(
+    ["🏠 ホーム", "➕ 追加", "📋 履歴", "📊 保有", "📈 分析", "🤖 AI"]
+)
 
 # ---- タブ: ホーム（ダッシュボード）----
 with tab_home:
@@ -434,3 +492,57 @@ with tab5:
         counts = df_all.groupby(["月", "baibai"]).size().unstack(fill_value=0)
         counts = counts.rename(columns={"買": "買い", "売": "売り"})
         st.bar_chart(counts, use_container_width=True)
+
+# ---- タブ: AI分析 ----
+with tab_ai:
+    st.subheader("🤖 AIに会社を分析してもらう")
+    trades = load_trades()
+    codes = {t["name"]: str(t["code"]) for t in trades if t.get("code")}
+    names = list(dict.fromkeys(t["name"] for t in trades))
+
+    if names:
+        pick = st.selectbox("記録した銘柄から選ぶ", names)
+    else:
+        pick = None
+        st.caption("取引を記録すると、ここから銘柄を選べるようになります。")
+
+    with st.expander("記録にない会社を調べる"):
+        manual_name = st.text_input("会社名（例: 任天堂）")
+        manual_code = st.text_input("証券コード（例: 7974）")
+
+    target_name = manual_name.strip() or pick
+    target_code = manual_code.strip() or (codes.get(pick, "") if pick else "")
+
+    if st.button("🤖 分析する", use_container_width=True, type="primary"):
+        if not get_config("GEMINI_API_KEY"):
+            st.error(
+                "Geminiの設定がまだです。share.streamlit.io でこのアプリの "
+                "Settings → Secrets に `GEMINI_API_KEY = \"あなたのキー\"` を追加してください。"
+            )
+        elif not target_name:
+            st.error("銘柄を選ぶか、会社名を入力してください。")
+        else:
+            # この銘柄の保有・取引状況をまとめる
+            holdings, _ = calc_profit(trades)
+            position = "この銘柄の取引記録はありません。"
+            if target_name in holdings:
+                h = holdings[target_name]
+                parts = []
+                if h["shares"] > 0:
+                    avg = h["cost"] / h["shares"]
+                    parts.append(f"現在 {h['shares']}株を保有（平均取得単価 {avg:,.0f}円）")
+                if round(h["profit"]) != 0:
+                    parts.append(f"これまでの実現損益 {round(h['profit']):+,}円")
+                if parts:
+                    position = "。".join(parts) + "。"
+
+            with st.spinner("AIが分析中です…（10秒ほどかかります）"):
+                stock_data = get_stock_summary(target_code) if target_code else "（証券コード未登録のため株価データなし）"
+                try:
+                    result = ai_analyze(target_name, target_code, stock_data, position)
+                    st.markdown(result)
+                except Exception:
+                    st.error(
+                        "AIの呼び出しに失敗しました。GEMINI_API_KEY が正しいか、"
+                        "Geminiの無料枠が残っているか確認してください。"
+                    )
