@@ -107,12 +107,13 @@ def ai_analyze(stock_name: str, code: str, stock_data: str, position: str) -> st
     """Geminiに会社の分析をしてもらう"""
     from google import genai
     api_key = get_config("GEMINI_API_KEY").strip()
+    # キーの形式によって接続方式が違うため、両方の方式を自動で試す
+    clients = [
+        lambda: genai.Client(api_key=api_key),
+        lambda: genai.Client(vertexai=True, api_key=api_key),
+    ]
     if api_key.startswith("AQ."):
-        # Vertex AI エクスプレスモードのキー（AQ.で始まる）
-        client = genai.Client(vertexai=True, api_key=api_key)
-    else:
-        # Google AI Studio のキー（AIzaで始まる）
-        client = genai.Client(api_key=api_key)
+        clients.reverse()  # AQ.形式はVertex方式を先に試す
     prompt = f"""あなたは親しみやすい株式投資の先生です。投資初心者にもわかる日本語で、以下の会社を分析してください。
 
 会社名: {stock_name}（証券コード: {code or "不明"}）
@@ -130,14 +131,20 @@ def ai_analyze(stock_name: str, code: str, stock_data: str, position: str) -> st
 4. **注目ポイント** — 良い材料とリスクを1つずつ
 
 最後に「※これは参考情報です。投資の判断はご自身で行ってください。」と添えてください。"""
-    # モデル名が古い/新しい場合に備えて、順番に試す
+    # 接続方式×モデル名の組み合わせを順番に試す
     last_err = None
-    for model in ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]:
+    for make_client in clients:
         try:
-            resp = client.models.generate_content(model=model, contents=prompt)
-            return resp.text
+            client = make_client()
         except Exception as e:
             last_err = e
+            continue
+        for model in ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]:
+            try:
+                resp = client.models.generate_content(model=model, contents=prompt)
+                return resp.text
+            except Exception as e:
+                last_err = e
     raise last_err
 
 
