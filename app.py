@@ -55,6 +55,23 @@ def save_trade(name: str, code: str, baibai: str, shares: int, price: int):
     sb.table("trades").insert(row).execute()
 
 
+def update_trade(trade_id, date_str: str, name: str, code: str, baibai: str, shares: int, price: int):
+    sb = get_supabase()
+    sb.table("trades").update({
+        "date": date_str,
+        "name": name,
+        "code": code or None,
+        "baibai": baibai,
+        "shares": shares,
+        "price": price,
+    }).eq("id", trade_id).execute()
+
+
+def delete_trade(trade_id):
+    sb = get_supabase()
+    sb.table("trades").delete().eq("id", trade_id).execute()
+
+
 @st.cache_data(ttl=300)
 def fetch_price(code: str):
     """東証の現在株価を取得する（約20分遅れの参考値）。取得できなければ None"""
@@ -258,6 +275,46 @@ with tab2:
             for t in reversed(trades)  # 新しい取引を上に表示
         ]
         st.dataframe(rows, use_container_width=True, hide_index=True)
+
+        # ---- 取引の修正・削除 ----
+        st.divider()
+        st.markdown("##### ✏️ 取引の修正・削除")
+        options = {
+            f'{t["date"]} ／ {t["name"]} ／ {t["baibai"]} ／ {t["shares"]}株 ／ {t["price"]:,}円':
+            t for t in reversed(trades)
+        }
+        selected = st.selectbox("直したい取引を選んでください", list(options.keys()))
+        t = options[selected]
+
+        with st.form("edit_trade"):
+            e_date = st.date_input("日付", value=date.fromisoformat(str(t["date"])))
+            e_name = st.text_input("銘柄名", value=t["name"])
+            e_code = st.text_input("証券コード（任意）", value=t.get("code") or "")
+            e_baibai = st.radio("売買", ["買", "売"],
+                                index=0 if t["baibai"] == "買" else 1, horizontal=True)
+            e_shares = st.number_input("株数", min_value=1, step=1, value=int(t["shares"]))
+            e_price = st.number_input("単価（円）", min_value=1, step=1, value=int(t["price"]))
+            delete_check = st.checkbox("🗑 この取引を削除する（削除のときだけチェック）")
+            c1, c2 = st.columns(2)
+            save_btn = c1.form_submit_button("✏️ 修正を保存", use_container_width=True)
+            delete_btn = c2.form_submit_button("🗑 削除する", use_container_width=True)
+
+        if save_btn:
+            if not e_name.strip():
+                st.error("銘柄名を入力してください。")
+            else:
+                update_trade(t["id"], e_date.isoformat(), e_name.strip(),
+                             e_code.strip(), e_baibai, int(e_shares), int(e_price))
+                st.toast("修正しました ✏️")
+                st.rerun()
+
+        if delete_btn:
+            if delete_check:
+                delete_trade(t["id"])
+                st.toast("削除しました 🗑")
+                st.rerun()
+            else:
+                st.warning("削除するには「この取引を削除する」にチェックを入れてから押してください。")
 
 # ---- タブ4: 保有状況 ----
 with tab4:
