@@ -98,7 +98,7 @@ def calc_profit(trades: list):
 # ---- ページ設定 ----
 st.set_page_config(page_title="株取引", page_icon="assets/icon.png", layout="centered")
 
-# ファビコンとホーム画面用アイコンを固定URLのアイコンに差し替える
+# ファビコン・ホーム画面用アイコン・PWAマニフェストを差し替える
 # （page_iconだけでは「ホーム画面に追加」のアイコンが変わらないため）
 components.html("""
 <script>
@@ -114,6 +114,10 @@ const apple = doc.createElement('link');
 apple.rel = 'apple-touch-icon';
 apple.href = './app/static/icon.png';
 doc.head.appendChild(apple);
+const manifest = doc.createElement('link');
+manifest.rel = 'manifest';
+manifest.href = './app/static/manifest.json';
+doc.head.appendChild(manifest);
 </script>
 """, height=0)
 
