@@ -106,7 +106,7 @@ def get_stock_summary(code: str) -> str:
 def ai_analyze(stock_name: str, code: str, stock_data: str, position: str) -> str:
     """Geminiに会社の分析をしてもらう"""
     from google import genai
-    client = genai.Client(api_key=get_config("GEMINI_API_KEY"))
+    client = genai.Client(api_key=get_config("GEMINI_API_KEY").strip())
     prompt = f"""あなたは親しみやすい株式投資の先生です。投資初心者にもわかる日本語で、以下の会社を分析してください。
 
 会社名: {stock_name}（証券コード: {code or "不明"}）
@@ -124,8 +124,15 @@ def ai_analyze(stock_name: str, code: str, stock_data: str, position: str) -> st
 4. **注目ポイント** — 良い材料とリスクを1つずつ
 
 最後に「※これは参考情報です。投資の判断はご自身で行ってください。」と添えてください。"""
-    resp = client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
-    return resp.text
+    # モデル名が古い/新しい場合に備えて、順番に試す
+    last_err = None
+    for model in ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]:
+        try:
+            resp = client.models.generate_content(model=model, contents=prompt)
+            return resp.text
+        except Exception as e:
+            last_err = e
+    raise last_err
 
 
 @st.cache_data(ttl=300)
@@ -541,8 +548,6 @@ with tab_ai:
                 try:
                     result = ai_analyze(target_name, target_code, stock_data, position)
                     st.markdown(result)
-                except Exception:
-                    st.error(
-                        "AIの呼び出しに失敗しました。GEMINI_API_KEY が正しいか、"
-                        "Geminiの無料枠が残っているか確認してください。"
-                    )
+                except Exception as e:
+                    st.error("AIの呼び出しに失敗しました。下のエラー内容を確認してください。")
+                    st.code(str(e))
