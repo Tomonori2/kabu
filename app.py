@@ -1,5 +1,7 @@
 # -*- coding: utf-8 -*-
+import json
 import os
+import re
 import time
 from datetime import date
 
@@ -71,6 +73,35 @@ def update_trade(trade_id, date_str: str, name: str, code: str, baibai: str, sha
 def delete_trade(trade_id):
     sb = get_supabase()
     sb.table("trades").delete().eq("id", trade_id).execute()
+
+
+def load_setting(key: str):
+    """設定値を読む。settingsテーブルが未作成なら None を返す"""
+    try:
+        res = get_supabase().table("settings").select("value").eq("key", key).execute()
+        return res.data[0]["value"] if res.data else ""
+    except Exception:
+        return None
+
+
+def save_setting(key: str, value: str):
+    get_supabase().table("settings").upsert({"key": key, "value": value}).execute()
+
+
+def load_watchlist():
+    """ウォッチリストを読む。テーブルが未作成なら None を返す"""
+    try:
+        return get_supabase().table("watchlist").select("*").order("id").execute().data
+    except Exception:
+        return None
+
+
+def add_watch(code: str, name: str):
+    get_supabase().table("watchlist").insert({"code": code, "name": name}).execute()
+
+
+def remove_watch(watch_id):
+    get_supabase().table("watchlist").delete().eq("id", watch_id).execute()
 
 
 def get_stock_summary(code: str) -> str:
@@ -165,6 +196,95 @@ def gemini_generate(messages: list) -> str:
         if attempt == 0:
             time.sleep(4)
     raise last_err
+
+
+def gemini_read_trades(image_bytes: bytes, mime_type: str) -> list:
+    """取引画面のスクショをGeminiで読み取り、取引のリストにして返す"""
+    from google import genai
+    from google.genai import types
+
+    api_key = get_config("GEMINI_API_KEY").strip()
+    factories = [
+        lambda: genai.Client(api_key=api_key),
+        lambda: genai.Client(vertexai=True, api_key=api_key),
+    ]
+    if api_key.startswith("AQ."):
+        factories.reverse()
+
+    prompt = """この画像は株取引のスクリーンショットです。読み取れる取引を抽出して、JSONだけを出力してください。
+形式: [{"date": "YYYY-MM-DD"（不明ならnull）, "name": "銘柄名", "code": "4桁の証券コード"（不明ならnull）, "baibai": "買"または"売", "shares": 株数の整数, "price": 1株あたりの約定単価の整数}]
+注意: 必ず配列で出力する。JSON以外の文字は一切出力しない。"""
+    contents = [types.Content(role="user", parts=[
+        types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
+        types.Part.from_text(text=prompt),
+    ])]
+
+    text = None
+    last_err = None
+    for make_client in factories:
+        try:
+            client = make_client()
+        except Exception as e:
+            last_err = e
+            continue
+        for model in ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash"]:
+            try:
+                resp = client.models.generate_content(model=model, contents=contents)
+                if resp.text:
+                    text = resp.text
+                    break
+            except Exception as e:
+                last_err = e
+        if text:
+            break
+    if text is None:
+        raise last_err
+
+    m = re.search(r"\[.*\]|\{.*\}", text, re.S)
+    if not m:
+        return []
+    data = json.loads(m.group(0))
+    if isinstance(data, dict):
+        data = [data]
+    result = []
+    for d in data:
+        try:
+            item = {
+                "date": str(d.get("date") or date.today().isoformat())[:10],
+                "name": str(d.get("name") or "").strip(),
+                "code": str(d.get("code") or "").strip(),
+                "baibai": "売" if "売" in str(d.get("baibai", "買")) else "買",
+                "shares": int(float(d.get("shares") or 0)),
+                "price": int(round(float(d.get("price") or 0))),
+            }
+        except (TypeError, ValueError):
+            continue
+        if item["name"] and item["shares"] > 0 and item["price"] > 0:
+            result.append(item)
+    return result
+
+
+@st.cache_data(ttl=3600)
+def fetch_history(code: str):
+    """直近6か月の終値を取得する（チャート表示用）"""
+    try:
+        hist = yf.Ticker(f"{code}.T").history(period="6mo")
+        return hist["Close"] if not hist.empty else None
+    except Exception:
+        return None
+
+
+def run_sensei(prompt: str):
+    """高坂先生との会話を新しく始めて、最初の回答をもらう"""
+    st.session_state.ai_messages = [{"role": "user", "text": prompt, "hidden": True}]
+    with st.spinner("高坂先生が考え中です…（30秒ほどかかることがあります）"):
+        try:
+            answer = gemini_generate(st.session_state.ai_messages)
+            st.session_state.ai_messages.append({"role": "model", "text": answer})
+        except Exception as e:
+            st.session_state.ai_messages = []
+            st.error("AIの呼び出しに失敗しました。下のエラー内容を確認してください。")
+            st.code(str(e))
 
 
 @st.cache_data(ttl=86400)
@@ -313,6 +433,25 @@ with tab_home:
         c1.metric(f"今月の損益（{date.today().month}月）", f"{month_profit:+,}円")
         c2.metric("通算の実現損益", f"{total:+,}円")
 
+        # ---- 今月の目標 ----
+        goal_raw = load_setting("monthly_goal")
+        if goal_raw is not None:
+            goal = int(goal_raw) if str(goal_raw).isdigit() else 0
+            if goal > 0:
+                pct = max(0.0, min(month_profit / goal, 1.0))
+                st.progress(
+                    pct,
+                    text=f"🎯 今月の目標 {goal:,}円 ／ 達成率 {month_profit / goal * 100:.0f}%",
+                )
+            with st.expander("🎯 毎月の目標を設定する"):
+                new_goal = st.number_input(
+                    "毎月の利益目標（円）", min_value=0, step=1000, value=goal,
+                    help="0にすると目標ゲージは非表示になります",
+                )
+                if st.button("目標を保存", use_container_width=True):
+                    save_setting("monthly_goal", str(int(new_goal)))
+                    st.rerun()
+
         c1, c2 = st.columns(2)
         c1.metric(
             "含み損益（保有分）",
@@ -385,6 +524,53 @@ with tab1:
                     "Supabaseの trades テーブルに `code` 列（text）の追加が必要です。"
                     "PROGRESS.md の手順を確認してください。"
                 )
+
+    # ---- スクショから自動入力 ----
+    st.divider()
+    st.markdown("##### 📷 スクショから自動入力")
+    st.caption("証券アプリの約定画面などのスクショを選ぶと、高坂先生が読み取って入力してくれます")
+    up = st.file_uploader(
+        "画像を選ぶ", type=["png", "jpg", "jpeg", "webp"], label_visibility="collapsed"
+    )
+    if up is not None and st.button("📷 読み取る", use_container_width=True):
+        if not get_config("GEMINI_API_KEY"):
+            st.error("Geminiの設定がまだです（Secrets に GEMINI_API_KEY を追加してください）。")
+        else:
+            with st.spinner("高坂先生が読み取り中です…"):
+                try:
+                    found = gemini_read_trades(up.getvalue(), up.type or "image/png")
+                    if found:
+                        st.session_state.scan_trades = found
+                    else:
+                        st.session_state.scan_trades = None
+                        st.warning("取引を読み取れませんでした。金額や銘柄名が写ったスクショで試してください。")
+                except Exception as e:
+                    st.error("読み取りに失敗しました。")
+                    st.code(str(e))
+
+    if st.session_state.get("scan_trades"):
+        st.markdown("**読み取り結果（内容を確認してから記録してください）:**")
+        st.dataframe(
+            [{"日付": s["date"], "銘柄": s["name"], "コード": s["code"] or "—",
+              "売買": s["baibai"], "株数": s["shares"], "単価（円）": f'{s["price"]:,}'}
+             for s in st.session_state.scan_trades],
+            use_container_width=True, hide_index=True,
+        )
+        c1, c2 = st.columns(2)
+        if c1.button("✅ この内容で記録する", use_container_width=True, type="primary"):
+            for s in st.session_state.scan_trades:
+                try:
+                    d = date.fromisoformat(s["date"]).isoformat()
+                except ValueError:
+                    d = date.today().isoformat()
+                save_trade(d, s["name"], s["code"], s["baibai"], s["shares"], s["price"])
+            saved_count = len(st.session_state.scan_trades)
+            st.session_state.scan_trades = None
+            st.toast(f"{saved_count}件 記録しました 📷")
+            st.rerun()
+        if c2.button("❌ やり直す", use_container_width=True):
+            st.session_state.scan_trades = None
+            st.rerun()
 
 # ---- タブ2: 取引履歴 ----
 with tab2:
@@ -470,6 +656,12 @@ with tab4:
                     delta=f"{fukumi:+,.0f}円（含み損益）",
                 )
                 st.caption(f"現在値 {now:,.0f}円 ／ 平均取得単価 {avg:,.0f}円")
+                with st.expander(f"📊 {stock_name} のチャート（6か月）"):
+                    closes = fetch_history(stock_code)
+                    if closes is not None:
+                        st.line_chart(closes, use_container_width=True)
+                    else:
+                        st.caption("チャートを取得できませんでした")
             else:
                 st.metric(
                     label=stock_name,
@@ -487,6 +679,31 @@ with tab4:
             mark = "＋" if total_fukumi >= 0 else "－"
             st.markdown(f"**含み損益 合計: {mark}{abs(total_fukumi):,.0f}円**")
             st.caption("※ 株価は20分ほど遅れの参考値です")
+
+    # ---- ウォッチリスト ----
+    st.divider()
+    st.markdown("##### 👀 ウォッチリスト（気になる銘柄）")
+    watch = load_watchlist()
+    if watch is None:
+        st.caption("この機能を使うには、Supabaseで watchlist テーブルの作成が必要です（PROGRESS.md 参照）")
+    else:
+        c1, c2 = st.columns([3, 1])
+        w_code = c1.text_input("証券コードで追加（例: 9984）", key="watch_code", label_visibility="collapsed", placeholder="証券コードで追加（例: 9984）")
+        if c2.button("追加", use_container_width=True):
+            if w_code.strip():
+                w_name = fetch_company_name(w_code.strip()) or w_code.strip()
+                add_watch(w_code.strip(), w_name)
+                st.rerun()
+        for w in watch:
+            now = fetch_price(str(w["code"]))
+            c1, c2 = st.columns([5, 1])
+            c1.metric(
+                label=f'{w["name"]}（{w["code"]}）',
+                value=f"{now:,.0f}円" if now is not None else "—",
+            )
+            if c2.button("🗑", key=f'rmw_{w["id"]}'):
+                remove_watch(w["id"])
+                st.rerun()
 
 # ---- タブ5: 分析 ----
 with tab5:
@@ -632,15 +849,48 @@ with tab_ai:
 最後に「※これは参考情報です。投資の判断はご自身で行ってください。」と添えてください。
 このあと生徒から追加の質問が来たら、高坂先生として同じ調子で会話を続けてください。"""
 
-            st.session_state.ai_messages = [{"role": "user", "text": prompt, "hidden": True}]
-            with st.spinner("高坂先生が分析中です…（高性能モードのため30秒ほどかかることがあります）"):
-                try:
-                    answer = gemini_generate(st.session_state.ai_messages)
-                    st.session_state.ai_messages.append({"role": "model", "text": answer})
-                except Exception as e:
-                    st.session_state.ai_messages = []
-                    st.error("AIの呼び出しに失敗しました。下のエラー内容を確認してください。")
-                    st.code(str(e))
+            run_sensei(prompt)
+
+    # ---- ポートフォリオ診断 ----
+    if st.button("💼 保有株ぜんぶを診断してもらう", use_container_width=True):
+        if not get_config("GEMINI_API_KEY"):
+            st.error("Geminiの設定がまだです（Secrets に GEMINI_API_KEY を追加してください）。")
+        elif not trades:
+            st.error("まだ取引がありません。")
+        else:
+            holdings, realized = calc_profit(trades)
+            port_lines = []
+            for n, h in holdings.items():
+                if h["shares"] > 0:
+                    avg = h["cost"] / h["shares"]
+                    c = codes.get(n)
+                    line = f"- {n}（{c or 'コード不明'}）: {h['shares']}株、平均取得単価 {avg:,.0f}円"
+                    now = fetch_price(c) if c else None
+                    if now is not None:
+                        line += f"、現在値 {now:,.0f}円（含み損益 {(now - avg) * h['shares']:+,.0f}円）"
+                    port_lines.append(line)
+            total_profit = round(sum(h["profit"] for h in holdings.values()))
+            win = sum(1 for r in realized if r["profit"] > 0)
+            seiseki = f"通算実現損益 {total_profit:+,}円、売却 {len(realized)}回（うち勝ち {win}回）"
+
+            prompt = f"""あなたは「高坂先生」。親しみやすく頼れる株式投資の先生です。投資初心者にもわかる日本語で、この生徒のポートフォリオ（保有株全体）を診断してください。
+可能であればGoogle検索で各社の最新状況も確認して反映してください。
+
+【保有株】
+{chr(10).join(port_lines) if port_lines else "現在保有なし"}
+
+【これまでの成績】
+{seiseki}
+
+以下の構成で、マークダウンで簡潔に（全体で600字程度）:
+1. **全体のバランス** — 業種の偏り・集中度など
+2. **良いところ** — ほめられる点
+3. **気をつけたいところ** — リスクや改善点
+4. **高坂先生からのひとこと** — 次の一手のヒント
+
+最後に「※これは参考情報です。投資の判断はご自身で行ってください。」と添えてください。
+このあと生徒から追加の質問が来たら、高坂先生として同じ調子で会話を続けてください。"""
+            run_sensei(prompt)
 
     # ---- 会話の表示 ----
     for m in st.session_state.get("ai_messages", []):
