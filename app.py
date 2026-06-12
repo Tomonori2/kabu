@@ -495,6 +495,11 @@ with tab_home:
                     pct,
                     text=f"🎯 今月の目標 {goal:,}円 ／ 達成率 {month_profit / goal * 100:.0f}%",
                 )
+                if month_profit >= goal:
+                    if st.session_state.get("celebrated") != this_month:
+                        st.balloons()
+                        st.session_state.celebrated = this_month
+                    st.success(f"🎉 今月の目標を達成しました！（＋{month_profit:,}円 ／ 目標 {goal:,}円）")
             with st.expander("🎯 毎月の目標を設定する"):
                 new_goal = st.number_input(
                     "毎月の利益目標（円）", min_value=0, step=1000, value=goal,
@@ -996,6 +1001,46 @@ with tab_ai:
 このあと生徒から追加の質問が来たら、高坂先生として同じ調子で会話を続けてください。"""
 
             run_sensei(prompt)
+
+    # ---- 今日の市況 ----
+    if st.button("📰 今日の市況を聞く", use_container_width=True):
+        if not get_config("GEMINI_API_KEY"):
+            st.error("Geminiの設定がまだです（Secrets に GEMINI_API_KEY を追加してください）。")
+        else:
+            holdings, _ = calc_profit(trades)
+            meigara_lines = []
+            for h in holdings.values():
+                if h["shares"] > 0:
+                    now = fetch_price(h["code"]) if h["code"] else None
+                    avg = h["cost"] / h["shares"]
+                    line = f"- 保有: {h['name']}（{h['code'] or 'コード不明'}）{h['shares']}株、平均取得単価 {avg:,.0f}円"
+                    if now is not None:
+                        line += f"、現在値 {now:,.0f}円"
+                    meigara_lines.append(line)
+            for w in (load_watchlist() or []):
+                noww = fetch_price(str(w["code"]))
+                line = f"- ウォッチ中: {w['name']}（{w['code']}）"
+                if noww is not None:
+                    line += f"現在値 {noww:,.0f}円"
+                meigara_lines.append(line)
+
+            if not meigara_lines:
+                st.error("保有株かウォッチリストの銘柄がまだありません。")
+            else:
+                prompt = f"""あなたは「高坂先生」。親しみやすく頼れる株式投資の先生です。今日は {date.today().isoformat()} です。
+Google検索で今日の日本株市場の状況と、以下の銘柄それぞれの最新ニュース・値動きを調べて、生徒向けの「今日の市況ブリーフィング」を日本語で書いてください。
+
+【生徒の銘柄】
+{chr(10).join(meigara_lines)}
+
+構成（マークダウンで、全体700字程度）:
+1. **今日の市場ぜんたい** — 日経平均などの大きな流れを2〜3行で
+2. **あなたの銘柄の今日** — 銘柄ごとに1〜2行ずつ、値動きと関連ニュース
+3. **今日のひとこと** — 高坂先生からのアドバイスを1つ
+
+最後に「※これは参考情報です。投資の判断はご自身で行ってください。」と添えてください。
+このあと生徒から追加の質問が来たら、高坂先生として同じ調子で会話を続けてください。"""
+                run_sensei(prompt)
 
     # ---- ポートフォリオ診断 ----
     if st.button("💼 保有株ぜんぶを診断してもらう", use_container_width=True):
