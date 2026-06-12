@@ -305,22 +305,26 @@ with tab_home:
                 fukumi_total += (now - h["cost"] / h["shares"]) * h["shares"]
                 has_price = True
 
+        # 今月の損益（月が変わると0円からスタート）
+        this_month = date.today().strftime("%Y-%m")
+        month_profit = round(sum(r["profit"] for r in realized if str(r["date"])[:7] == this_month))
+
         c1, c2 = st.columns(2)
-        c1.metric("実現損益（確定分）", f"{total:+,}円")
-        c2.metric(
+        c1.metric(f"今月の損益（{date.today().month}月）", f"{month_profit:+,}円")
+        c2.metric("通算の実現損益", f"{total:+,}円")
+
+        c1, c2 = st.columns(2)
+        c1.metric(
             "含み損益（保有分）",
             f"{fukumi_total:+,.0f}円" if has_price else "—",
         )
+        c2.metric("保有銘柄", f"{len(mochikabu)}銘柄")
         if not has_price and mochikabu:
             st.caption("※ 含み損益は、取引追加で証券コードを入力した銘柄に表示されます")
 
         if total > 0:
             tax = round(total * TAX_RATE)
-            st.caption(f"実現損益から税金（{TAX_RATE * 100:.3f}%）を引いた手取りは ＋{total - tax:,}円")
-
-        c1, c2 = st.columns(2)
-        c1.metric("保有銘柄", f"{len(mochikabu)}銘柄")
-        c2.metric("取引回数", f"{len(trades)}回")
+            st.caption(f"通算の実現損益から税金（{TAX_RATE * 100:.3f}%）を引いた手取りは ＋{total - tax:,}円")
 
         # ---- 銘柄別の実現損益 ----
         kakutei = [(n, h) for n, h in holdings.items() if round(h["profit"]) != 0]
@@ -542,6 +546,11 @@ with tab5:
             st.markdown("##### 🗓 月別の損益")
             monthly = df.groupby("月")["profit"].sum()
             st.bar_chart(monthly, use_container_width=True)
+            month_rows = [
+                {"月": m, "損益": f"{round(v):+,}円"}
+                for m, v in monthly.sort_index(ascending=False).items()
+            ]
+            st.dataframe(month_rows, use_container_width=True, hide_index=True)
 
             # ---- 銘柄別の実現損益 ----
             st.markdown("##### 🏷 銘柄別の損益")
