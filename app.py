@@ -4,6 +4,7 @@ import json
 import os
 import re
 import time
+import unicodedata
 from datetime import date
 
 import pandas as pd
@@ -307,6 +308,11 @@ def run_sensei(prompt: str):
             st.code(str(e))
 
 
+def normalize_code(s) -> str:
+    """証券コードの表記を整える（全角→半角、空白除去、大文字化）"""
+    return unicodedata.normalize("NFKC", str(s or "")).strip().upper()
+
+
 @st.cache_data(ttl=86400)
 def fetch_company_name(code: str) -> str:
     """証券コードから会社名を調べる（見つからなければ空文字）"""
@@ -554,13 +560,21 @@ with tab1:
         "証券コード（任意・例: 7203）",
         help="入力すると会社名が自動で出ます。保有状況タブに現在株価と含み損益も表示されます",
     )
+    code = normalize_code(code)  # 全角入力なども自動で半角に直す
     suggested_name = ""
-    if code.strip():
-        suggested_name = fetch_company_name(code.strip())
+    if code:
+        suggested_name = fetch_company_name(code)
         if suggested_name:
-            st.success(f"この銘柄: {suggested_name}")
+            st.success(f"この銘柄: {suggested_name}（コード: {code}）")
         else:
-            st.warning("この証券コードの会社が見つかりませんでした。コードを確認してください。")
+            # 失敗を覚え込まないようにキャッシュを消しておく
+            fetch_company_name.clear()
+            if fetch_price(code) is not None:
+                st.info(f"コード {code} は有効のようです（株価は取得できました）が、"
+                        "会社名だけ取得できませんでした。銘柄名は手で入力してください。")
+            else:
+                st.warning(f"コード {code} の会社が見つかりませんでした。"
+                           "コードを確認するか、少し時間をおいて試してください。")
 
     with st.form("add_trade"):
         trade_date = st.date_input("日付", value=date.today())
@@ -719,7 +733,7 @@ with tab2:
                 saved_ok = False
                 try:
                     update_trade(t["id"], e_date.isoformat(), e_name.strip(),
-                                 e_code.strip(), e_baibai, int(e_shares), int(e_price),
+                                 normalize_code(e_code), e_baibai, int(e_shares), int(e_price),
                                  e_memo.strip())
                     saved_ok = True
                 except Exception:
@@ -799,9 +813,10 @@ with tab4:
         c1, c2 = st.columns([3, 1])
         w_code = c1.text_input("証券コードで追加（例: 9984）", key="watch_code", label_visibility="collapsed", placeholder="証券コードで追加（例: 9984）")
         if c2.button("追加", use_container_width=True):
-            if w_code.strip():
-                w_name = fetch_company_name(w_code.strip()) or w_code.strip()
-                add_watch(w_code.strip(), w_name)
+            wc = normalize_code(w_code)
+            if wc:
+                w_name = fetch_company_name(wc) or wc
+                add_watch(wc, w_name)
                 st.rerun()
         for w in watch:
             now = fetch_price(str(w["code"]))
@@ -939,7 +954,7 @@ with tab_ai:
         manual_code = st.text_input("証券コード（例: 7974）")
 
     target_name = manual_name.strip() or pick
-    target_code = manual_code.strip() or (codes.get(pick, "") if pick else "")
+    target_code = normalize_code(manual_code) or (codes.get(pick, "") if pick else "")
 
     if st.button("👨‍🏫 高坂先生に分析してもらう", use_container_width=True, type="primary"):
         if not get_config("GEMINI_API_KEY"):
