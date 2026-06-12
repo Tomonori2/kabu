@@ -618,6 +618,11 @@ with tab1:
              for s in st.session_state.scan_trades],
             use_container_width=True, hide_index=True,
         )
+        scan_memo = st.text_input(
+            "メモ（任意・読み取った取引ぜんぶに付きます）",
+            key="scan_memo",
+            placeholder="例: 決算が良かったので買い",
+        )
         c1, c2 = st.columns(2)
         if c1.button("✅ この内容で記録する", use_container_width=True, type="primary"):
             for s in st.session_state.scan_trades:
@@ -625,7 +630,8 @@ with tab1:
                     d = date.fromisoformat(s["date"]).isoformat()
                 except ValueError:
                     d = date.today().isoformat()
-                save_trade(d, s["name"], s["code"], s["baibai"], s["shares"], s["price"])
+                save_trade(d, s["name"], s["code"], s["baibai"], s["shares"], s["price"],
+                           scan_memo.strip())
             saved_count = len(st.session_state.scan_trades)
             st.session_state.scan_trades = None
             st.toast(f"{saved_count}件 記録しました 📷")
