@@ -167,6 +167,16 @@ def gemini_generate(messages: list) -> str:
     raise last_err
 
 
+@st.cache_data(ttl=86400)
+def fetch_company_name(code: str) -> str:
+    """証券コードから会社名を調べる（見つからなければ空文字）"""
+    try:
+        info = yf.Ticker(f"{code}.T").info or {}
+        return info.get("shortName") or info.get("longName") or ""
+    except Exception:
+        return ""
+
+
 @st.cache_data(ttl=300)
 def fetch_price(code: str):
     """東証の現在株価を取得する（約20分遅れの参考値）。取得できなければ None"""
@@ -333,12 +343,24 @@ with tab_home:
 # ---- タブ1: 取引追加 ----
 with tab1:
     st.subheader("取引を追加する")
+    code = st.text_input(
+        "証券コード（任意・例: 7203）",
+        help="入力すると会社名が自動で出ます。保有状況タブに現在株価と含み損益も表示されます",
+    )
+    suggested_name = ""
+    if code.strip():
+        suggested_name = fetch_company_name(code.strip())
+        if suggested_name:
+            st.success(f"この銘柄: {suggested_name}")
+        else:
+            st.warning("この証券コードの会社が見つかりませんでした。コードを確認してください。")
+
     with st.form("add_trade"):
         trade_date = st.date_input("日付", value=date.today())
-        name = st.text_input("銘柄名（例: トヨタ）")
-        code = st.text_input(
-            "証券コード（任意・例: 7203）",
-            help="入力すると保有状況タブに現在株価と含み損益が表示されます",
+        name = st.text_input(
+            "銘柄名（例: トヨタ）",
+            value=suggested_name,
+            help="自動で入った名前は、呼びやすい名前（例: トヨタ）に書き換えてもOKです",
         )
         baibai = st.radio("売買", ["買", "売"], horizontal=True)
         shares = st.number_input("株数", min_value=1, step=1, value=1)
