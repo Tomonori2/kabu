@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+import hmac
 import json
 import os
 import re
@@ -396,6 +397,23 @@ div[data-testid="stImage"] img {
 }
 </style>
 """, unsafe_allow_html=True)
+
+# ---- パスワード保護 ----
+# Secrets に APP_PASSWORD を設定すると有効になる（未設定なら保護なしで動く）
+APP_PASSWORD = get_config("APP_PASSWORD")
+if APP_PASSWORD and not st.session_state.get("authed"):
+    st.title("📈 株取引")
+    st.markdown("このアプリはパスワードで保護されています。")
+    with st.form("login"):
+        pw = st.text_input("パスワード", type="password")
+        login = st.form_submit_button("ログイン", use_container_width=True, type="primary")
+    if login:
+        if hmac.compare_digest(pw, APP_PASSWORD):
+            st.session_state.authed = True
+            st.rerun()
+        else:
+            st.error("パスワードが違います。")
+    st.stop()
 
 st.title("📈 株取引")
 
