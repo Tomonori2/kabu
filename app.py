@@ -310,18 +310,35 @@ def fetch_price(code: str):
 
 
 def calc_profit(trades: list):
+    """取引から保有状況と実現損益を計算する。
+
+    証券コードが同じ取引は、銘柄名の表記が違っても同じ会社として合算する。
+    （コードがない取引は銘柄名でまとめる）
+    """
+    # 銘柄名→証券コードの対応表（同じ名前ならコードを共有できるように）
+    name_to_code = {}
+    for t in trades:
+        c = str(t.get("code") or "").strip()
+        if c:
+            name_to_code[t["name"]] = c
+
     holdings = {}
     realized = []  # 売却1回ごとの実現損益（分析用）
     for t in trades:
         name = t["name"]
+        code = str(t.get("code") or "").strip() or name_to_code.get(name, "")
+        key = code or name
         baibai = t["baibai"]
         shares = int(t["shares"])
         price = int(t["price"])
 
-        if name not in holdings:
-            holdings[name] = {"shares": 0, "cost": 0.0, "profit": 0.0}
+        if key not in holdings:
+            holdings[key] = {"name": name, "code": code, "shares": 0, "cost": 0.0, "profit": 0.0}
 
-        h = holdings[name]
+        h = holdings[key]
+        h["name"] = name  # 一番新しい取引の名前を表示に使う
+        if code and not h["code"]:
+            h["code"] = code
         if baibai == "買":
             h["shares"] += shares
             h["cost"] += shares * price
@@ -332,7 +349,7 @@ def calc_profit(trades: list):
                 h["profit"] += profit
                 h["cost"] -= avg * shares
                 h["shares"] -= shares
-                realized.append({"date": str(t["date"]), "name": name, "profit": profit})
+                realized.append({"date": str(t["date"]), "name": h["name"], "profit": profit})
 
     return holdings, realized
 
@@ -433,12 +450,10 @@ with tab_home:
         mochikabu = [(n, h) for n, h in holdings.items() if h["shares"] > 0]
 
         # 含み損益（証券コード登録済みの保有銘柄のみ）
-        codes = {t["name"]: str(t["code"]) for t in trades if t.get("code")}
         fukumi_total = 0.0
         has_price = False
-        for stock_name, h in mochikabu:
-            stock_code = codes.get(stock_name)
-            now = fetch_price(stock_code) if stock_code else None
+        for _, h in mochikabu:
+            now = fetch_price(h["code"]) if h["code"] else None
             if now is not None:
                 fukumi_total += (now - h["cost"] / h["shares"]) * h["shares"]
                 has_price = True
@@ -488,9 +503,9 @@ with tab_home:
         if kakutei:
             st.divider()
             st.markdown("##### 💰 銘柄別の実現損益")
-            for stock_name, h in kakutei:
+            for _, h in kakutei:
                 profit = round(h["profit"])
-                st.metric(label=stock_name, value=f"{profit:+,}円")
+                st.metric(label=h["name"], value=f"{profit:+,}円")
 
         # ---- 最近の取引 ----
         st.divider()
@@ -654,14 +669,12 @@ with tab4:
     if not mochikabu:
         st.info("現在、保有している株はありません。")
     else:
-        # 銘柄名 → 証券コードの対応（取引時に入力された最新のコードを使う）
-        codes = {t["name"]: str(t["code"]) for t in trades if t.get("code")}
-
         total_fukumi = 0.0
         has_price = False
-        for stock_name, h in mochikabu:
+        for _, h in mochikabu:
+            stock_name = h["name"]
             avg = h["cost"] / h["shares"]
-            stock_code = codes.get(stock_name)
+            stock_code = h["code"]
             now = fetch_price(stock_code) if stock_code else None
 
             if now is not None:
@@ -833,9 +846,14 @@ with tab_ai:
         else:
             # この銘柄の保有・取引状況をまとめる
             holdings, _ = calc_profit(trades)
+            target_h = None
+            for h in holdings.values():
+                if h["name"] == target_name or (target_code and h["code"] == target_code):
+                    target_h = h
+                    break
             position = "この銘柄の取引記録はありません。"
-            if target_name in holdings:
-                h = holdings[target_name]
+            if target_h is not None:
+                h = target_h
                 parts = []
                 if h["shares"] > 0:
                     avg = h["cost"] / h["shares"]
@@ -878,11 +896,11 @@ with tab_ai:
         else:
             holdings, realized = calc_profit(trades)
             port_lines = []
-            for n, h in holdings.items():
+            for h in holdings.values():
                 if h["shares"] > 0:
                     avg = h["cost"] / h["shares"]
-                    c = codes.get(n)
-                    line = f"- {n}（{c or 'コード不明'}）: {h['shares']}株、平均取得単価 {avg:,.0f}円"
+                    c = h["code"]
+                    line = f"- {h['name']}（{c or 'コード不明'}）: {h['shares']}株、平均取得単価 {avg:,.0f}円"
                     now = fetch_price(c) if c else None
                     if now is not None:
                         line += f"、現在値 {now:,.0f}円（含み損益 {(now - avg) * h['shares']:+,.0f}円）"
