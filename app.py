@@ -45,7 +45,7 @@ def load_trades():
     return result.data
 
 
-def save_trade(trade_date: str, name: str, code: str, baibai: str, shares: int, price: int):
+def save_trade(trade_date: str, name: str, code: str, baibai: str, shares: int, price: int, memo: str = ""):
     sb = get_supabase()
     row = {
         "date": trade_date,
@@ -56,10 +56,12 @@ def save_trade(trade_date: str, name: str, code: str, baibai: str, shares: int, 
     }
     if code:
         row["code"] = code
+    if memo:
+        row["memo"] = memo
     sb.table("trades").insert(row).execute()
 
 
-def update_trade(trade_id, date_str: str, name: str, code: str, baibai: str, shares: int, price: int):
+def update_trade(trade_id, date_str: str, name: str, code: str, baibai: str, shares: int, price: int, memo: str = ""):
     sb = get_supabase()
     sb.table("trades").update({
         "date": date_str,
@@ -68,7 +70,24 @@ def update_trade(trade_id, date_str: str, name: str, code: str, baibai: str, sha
         "baibai": baibai,
         "shares": shares,
         "price": price,
+        "memo": memo or None,
     }).eq("id", trade_id).execute()
+
+
+def load_dividends():
+    """配当の記録を読む。テーブルが未作成なら None を返す"""
+    try:
+        return get_supabase().table("dividends").select("*").order("date").order("id").execute().data
+    except Exception:
+        return None
+
+
+def save_dividend(d: str, name: str, amount: int):
+    get_supabase().table("dividends").insert({"date": d, "name": name, "amount": amount}).execute()
+
+
+def delete_dividend(div_id):
+    get_supabase().table("dividends").delete().eq("id", div_id).execute()
 
 
 def delete_trade(trade_id):
@@ -498,6 +517,13 @@ with tab_home:
             tax = round(total * TAX_RATE)
             st.caption(f"通算の実現損益から税金（{TAX_RATE * 100:.3f}%）を引いた手取りは ＋{total - tax:,}円")
 
+        divs = load_dividends()
+        if divs:
+            this_year = date.today().strftime("%Y")
+            dy = sum(int(d["amount"]) for d in divs if str(d["date"])[:4] == this_year)
+            if dy:
+                st.caption(f"💸 今年もらった配当: {dy:,}円")
+
         # ---- 銘柄別の実現損益 ----
         kakutei = [(n, h) for n, h in holdings.items() if round(h["profit"]) != 0]
         if kakutei:
@@ -541,6 +567,8 @@ with tab1:
         baibai = st.radio("売買", ["買", "売"], horizontal=True)
         shares = st.number_input("株数", min_value=1, step=1, value=1)
         price = st.number_input("単価（円）", min_value=1, step=1, value=1)
+        memo = st.text_input("メモ（任意・例: 決算が良かったので買い）",
+                             help="売買の理由を残しておくと、分析や高坂先生の振り返りに活きます")
         submitted = st.form_submit_button("記録する", use_container_width=True)
 
     if submitted:
@@ -548,7 +576,8 @@ with tab1:
             st.error("銘柄名を入力してください。")
         else:
             try:
-                save_trade(trade_date.isoformat(), name.strip(), code.strip(), baibai, int(shares), int(price))
+                save_trade(trade_date.isoformat(), name.strip(), code.strip(), baibai,
+                           int(shares), int(price), memo.strip())
                 st.success(f"記録しました: {trade_date} / {name} / {baibai} / {int(shares)}株 / {int(price):,}円")
                 st.cache_resource.clear()
             except Exception:
@@ -605,6 +634,34 @@ with tab1:
             st.session_state.scan_trades = None
             st.rerun()
 
+    # ---- 配当金の記録 ----
+    st.divider()
+    with st.expander("💸 配当金を記録する"):
+        divs = load_dividends()
+        if divs is None:
+            st.caption("この機能を使うには、Supabaseで dividends テーブルの作成が必要です（PROGRESS.md 参照）")
+        else:
+            with st.form("add_dividend"):
+                d_date = st.date_input("受け取った日", value=date.today())
+                d_name = st.text_input("銘柄名（例: トヨタ）")
+                d_amount = st.number_input("受け取った金額（円）", min_value=1, step=100, value=1000)
+                d_sub = st.form_submit_button("💸 配当を記録する", use_container_width=True)
+            if d_sub:
+                if not d_name.strip():
+                    st.error("銘柄名を入力してください。")
+                else:
+                    save_dividend(d_date.isoformat(), d_name.strip(), int(d_amount))
+                    st.toast("配当を記録しました 💸")
+                    st.rerun()
+            if divs:
+                st.markdown("**最近の配当:**")
+                for d in list(reversed(divs))[:5]:
+                    c1, c2 = st.columns([5, 1])
+                    c1.markdown(f'{d["date"]}　{d["name"]}　**{int(d["amount"]):,}円**')
+                    if c2.button("🗑", key=f'rmd_{d["id"]}'):
+                        delete_dividend(d["id"])
+                        st.rerun()
+
 # ---- タブ2: 取引履歴 ----
 with tab2:
     st.subheader("取引履歴")
@@ -614,7 +671,8 @@ with tab2:
     else:
         rows = [
             {"日付": t["date"], "銘柄": t["name"], "売買": t["baibai"],
-             "株数": t["shares"], "単価（円）": f'{t["price"]:,}'}
+             "株数": t["shares"], "単価（円）": f'{t["price"]:,}',
+             "メモ": t.get("memo") or ""}
             for t in reversed(trades)  # 新しい取引を上に表示
         ]
         st.dataframe(rows, use_container_width=True, hide_index=True)
@@ -637,6 +695,7 @@ with tab2:
                                 index=0 if t["baibai"] == "買" else 1, horizontal=True)
             e_shares = st.number_input("株数", min_value=1, step=1, value=int(t["shares"]))
             e_price = st.number_input("単価（円）", min_value=1, step=1, value=int(t["price"]))
+            e_memo = st.text_input("メモ（任意）", value=t.get("memo") or "")
             delete_check = st.checkbox("🗑 この取引を削除する（削除のときだけチェック）")
             c1, c2 = st.columns(2)
             save_btn = c1.form_submit_button("✏️ 修正を保存", use_container_width=True)
@@ -646,10 +705,18 @@ with tab2:
             if not e_name.strip():
                 st.error("銘柄名を入力してください。")
             else:
-                update_trade(t["id"], e_date.isoformat(), e_name.strip(),
-                             e_code.strip(), e_baibai, int(e_shares), int(e_price))
-                st.toast("修正しました ✏️")
-                st.rerun()
+                saved_ok = False
+                try:
+                    update_trade(t["id"], e_date.isoformat(), e_name.strip(),
+                                 e_code.strip(), e_baibai, int(e_shares), int(e_price),
+                                 e_memo.strip())
+                    saved_ok = True
+                except Exception:
+                    st.error("修正の保存に失敗しました。メモ機能を使うには trades テーブルに "
+                             "memo 列（text）の追加が必要です（PROGRESS.md 参照）。")
+                if saved_ok:
+                    st.toast("修正しました ✏️")
+                    st.rerun()
 
         if delete_btn:
             if delete_check:
@@ -812,6 +879,34 @@ with tab5:
         counts = counts.rename(columns={"買": "買い", "売": "売り"})
         st.bar_chart(counts, use_container_width=True)
 
+        # ---- 年別集計 ----
+        st.divider()
+        st.markdown("##### 🧾 年別集計（確定申告の参考）")
+        divs = load_dividends() or []
+        years = sorted(
+            {str(r["date"])[:4] for r in realized} | {str(d["date"])[:4] for d in divs},
+            reverse=True,
+        )
+        if not years:
+            st.caption("売却または配当の記録ができると、ここに年ごとのまとめが表示されます。")
+        else:
+            year_rows = []
+            for y in years:
+                p = round(sum(r["profit"] for r in realized if str(r["date"])[:4] == y))
+                dv = sum(int(d["amount"]) for d in divs if str(d["date"])[:4] == y)
+                goukei = p + dv
+                tax = round(goukei * TAX_RATE) if goukei > 0 else 0
+                year_rows.append({
+                    "年": y,
+                    "実現損益": f"{p:+,}円",
+                    "配当": f"{dv:,}円",
+                    "合計": f"{goukei:+,}円",
+                    "税金の目安": f"{tax:,}円",
+                    "手取りの目安": f"{goukei - tax:+,}円",
+                })
+            st.dataframe(year_rows, use_container_width=True, hide_index=True)
+            st.caption("※ 税金は20.315%で計算した目安です。実際の税額は口座の種類（特定/一般/NISA）や源泉徴収の有無で変わります。")
+
 # ---- タブ: AI分析（高坂先生）----
 SENSEI_AVATAR = "assets/sensei.png" if os.path.exists("assets/sensei.png") else "👨‍🏫"
 
@@ -863,6 +958,12 @@ with tab_ai:
                 if parts:
                     position = "。".join(parts) + "。"
 
+            memo_lines = [
+                f"- {t['date']} {t['baibai']}{t['shares']}株@{int(t['price']):,}円: {t['memo']}"
+                for t in trades
+                if t.get("memo") and (t["name"] == target_name or (target_code and str(t.get("code") or "") == target_code))
+            ][-5:]
+
             stock_data = get_stock_summary(target_code) if target_code else "（証券コード未登録のため株価データなし）"
             prompt = f"""あなたは「高坂先生」。親しみやすく頼れる株式投資の先生です。投資初心者にもわかる日本語で、以下の会社を分析してください。
 可能であればGoogle検索で最新のニュースや決算情報も確認して、分析に反映してください。
@@ -874,6 +975,9 @@ with tab_ai:
 
 【この生徒の保有・取引状況】
 {position}
+
+【この生徒の売買メモ（この銘柄）】
+{chr(10).join(memo_lines) if memo_lines else "（メモなし）"}
 
 以下の構成で、マークダウンで簡潔に書いてください（全体で600字程度）:
 1. **どんな会社？** — 事業内容を2〜3行で
@@ -908,6 +1012,10 @@ with tab_ai:
             total_profit = round(sum(h["profit"] for h in holdings.values()))
             win = sum(1 for r in realized if r["profit"] > 0)
             seiseki = f"通算実現損益 {total_profit:+,}円、売却 {len(realized)}回（うち勝ち {win}回）"
+            memo_lines = [
+                f"- {t['date']} {t['name']} {t['baibai']}{t['shares']}株: {t['memo']}"
+                for t in trades if t.get("memo")
+            ][-10:]
 
             prompt = f"""あなたは「高坂先生」。親しみやすく頼れる株式投資の先生です。投資初心者にもわかる日本語で、この生徒のポートフォリオ（保有株全体）を診断してください。
 可能であればGoogle検索で各社の最新状況も確認して反映してください。
@@ -917,6 +1025,10 @@ with tab_ai:
 
 【これまでの成績】
 {seiseki}
+
+【売買メモ（最近のもの）】
+{chr(10).join(memo_lines) if memo_lines else "（メモなし）"}
+※メモがある場合は、売買の判断のクセ（良い習慣・危ない習慣）にも触れてください。
 
 以下の構成で、マークダウンで簡潔に（全体で600字程度）:
 1. **全体のバランス** — 業種の偏り・集中度など
