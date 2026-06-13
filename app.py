@@ -760,6 +760,21 @@ with tab2:
         ]
         st.dataframe(rows, use_container_width=True, hide_index=True)
 
+        # ---- CSVダウンロード ----
+        df_csv = pd.DataFrame(trades)
+        cols = [c for c in ["date", "name", "code", "baibai", "shares", "price", "memo"] if c in df_csv.columns]
+        df_csv = df_csv[cols].rename(columns={
+            "date": "日付", "name": "銘柄", "code": "証券コード",
+            "baibai": "売買", "shares": "株数", "price": "単価", "memo": "メモ",
+        })
+        st.download_button(
+            "📥 全取引をダウンロード（Excel用CSV）",
+            df_csv.to_csv(index=False).encode("utf-8-sig"),
+            file_name=f"株取引_{date.today().isoformat()}.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
+
         # ---- 取引の修正・削除 ----
         st.divider()
         st.markdown("##### ✏️ 取引の修正・削除")

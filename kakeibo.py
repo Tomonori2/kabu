@@ -451,6 +451,21 @@ with tab_list:
         ]
         st.dataframe(rows, use_container_width=True, hide_index=True)
 
+        # ---- CSVダウンロード ----
+        df_csv = pd.DataFrame(expenses)
+        cols = [c for c in ["date", "store", "category", "item", "amount", "memo"] if c in df_csv.columns]
+        df_csv = df_csv[cols].rename(columns={
+            "date": "日付", "store": "店", "category": "分類",
+            "item": "品目", "amount": "金額", "memo": "メモ",
+        })
+        st.download_button(
+            "📥 全データをダウンロード（Excel用CSV）",
+            df_csv.to_csv(index=False).encode("utf-8-sig"),
+            file_name=f"家計簿_{date.today().isoformat()}.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
+
         # ---- 修正・削除 ----
         st.divider()
         st.markdown("##### ✏️ 記録の修正・削除")
