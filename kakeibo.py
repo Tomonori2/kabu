@@ -96,6 +96,43 @@ def save_setting(key: str, value: str):
     get_supabase().table("settings").upsert({"key": key, "value": value}).execute()
 
 
+# ---- 収入 ----
+def load_incomes():
+    """収入の記録を読む。テーブルが未作成なら None を返す"""
+    try:
+        res = get_supabase().table("incomes").select("*").order("date").order("id").execute()
+        return res.data
+    except Exception:
+        return None
+
+
+def save_income(d: str, source: str, amount: int):
+    get_supabase().table("incomes").insert({"date": d, "source": source, "amount": amount}).execute()
+
+
+def delete_income(income_id):
+    get_supabase().table("incomes").delete().eq("id", income_id).execute()
+
+
+# ---- 固定費 ----
+def load_recurrings():
+    """固定費の登録を読む。テーブルが未作成なら None を返す"""
+    try:
+        res = get_supabase().table("recurrings").select("*").order("id").execute()
+        return res.data
+    except Exception:
+        return None
+
+
+def save_recurring(name: str, category: str, amount: int):
+    get_supabase().table("recurrings").insert(
+        {"name": name, "category": category, "amount": amount}).execute()
+
+
+def delete_recurring(rec_id):
+    get_supabase().table("recurrings").delete().eq("id", rec_id).execute()
+
+
 def _gemini_clients():
     from google import genai
 
@@ -291,11 +328,23 @@ if expenses is None:
     )
     st.stop()
 
+incomes = load_incomes() or []
+recurrings = load_recurrings() or []
+
+this_month = period_key(date.today())
+
+
+def prev_period(key: str) -> str:
+    """ひとつ前の家計簿月のキーを返す"""
+    y, m = map(int, key.split("-"))
+    if m == 1:
+        return f"{y - 1}-12"
+    return f"{y}-{m - 1:02d}"
+
+
 tab_home, tab_add, tab_list, tab_chart, tab_ai = st.tabs(
     ["🏠 ホーム", "➕ 追加", "📋 履歴", "📈 分析", "🤖 AI"]
 )
-
-this_month = period_key(date.today())
 
 # ---- タブ: ホーム ----
 with tab_home:
@@ -304,6 +353,7 @@ with tab_home:
     else:
         month_exp = [e for e in expenses if period_key(e["date"]) == this_month]
         month_total = sum(int(e["amount"]) for e in month_exp)
+        month_income = sum(int(i["amount"]) for i in incomes if period_key(i["date"]) == this_month)
 
         budget_raw = load_setting("kakeibo_budget")
         budget = int(budget_raw) if budget_raw and str(budget_raw).isdigit() else 0
@@ -320,7 +370,39 @@ with tab_home:
             )
         else:
             c2.metric("今月の記録", f"{len(month_exp)}件")
+
+        # ---- 収支（収入の記録があるときだけ）----
+        if month_income > 0:
+            balance = month_income - month_total
+            c1, c2 = st.columns(2)
+            c1.metric("今月の収入", f"{month_income:,}円")
+            c2.metric(
+                "今月の収支",
+                f"{balance:+,}円",
+                delta="黒字" if balance >= 0 else "赤字",
+                delta_color="normal" if balance >= 0 else "inverse",
+            )
         st.caption(f"※ 家計簿の「ひと月」は毎月{RESET_DAY}日にリセットされます")
+
+        # ---- 先月との比較 ----
+        prev = prev_period(this_month)
+        prev_exp = [e for e in expenses if period_key(e["date"]) == prev]
+        if prev_exp:
+            prev_total = sum(int(e["amount"]) for e in prev_exp)
+            diff = month_total - prev_total
+            updown = f"先月より {abs(diff):,}円 {'多い' if diff > 0 else '少ない'}" if diff != 0 else "先月と同じ"
+            st.markdown(f"**📊 先月（{period_label(prev)}）との比較:** {month_total:,}円 ⇔ {prev_total:,}円　→　{updown}")
+            now_cat = pd.DataFrame(month_exp).groupby("category")["amount"].sum() if month_exp else pd.Series(dtype=float)
+            prev_cat = pd.DataFrame(prev_exp).groupby("category")["amount"].sum()
+            cat_diffs = []
+            for cat in set(now_cat.index) | set(prev_cat.index):
+                d = int(now_cat.get(cat, 0)) - int(prev_cat.get(cat, 0))
+                if d != 0:
+                    cat_diffs.append((cat, d))
+            cat_diffs.sort(key=lambda x: abs(x[1]), reverse=True)
+            for cat, d in cat_diffs[:3]:
+                arrow = "🔺" if d > 0 else "🔽"
+                st.caption(f"{arrow} {cat}: 先月より {abs(d):,}円 {'増' if d > 0 else '減'}")
 
         # ---- 今月の予算 ----
         if budget_raw is not None:
@@ -437,6 +519,78 @@ with tab_add:
                      e_item.strip(), int(e_amount), e_memo.strip())
         st.success(f"記録しました: {e_date} / {e_category} / {int(e_amount):,}円")
 
+    # ---- 収入の記録 ----
+    st.divider()
+    with st.expander("💴 収入を記録する（給料・ボーナスなど）"):
+        if load_incomes() is None:
+            st.caption("この機能を使うには、Supabaseで incomes テーブルの作成が必要です（PROGRESS.md 参照）")
+        else:
+            with st.form("add_income"):
+                i_date = st.date_input("入った日", value=date.today(), key="inc_date")
+                i_source = st.text_input("内容（例: 給料、ボーナス、臨時収入）")
+                i_amount = st.number_input("金額（円）", min_value=1, step=1000, value=200000, key="inc_amt")
+                i_sub = st.form_submit_button("💴 収入を記録する", use_container_width=True)
+            if i_sub:
+                if not i_source.strip():
+                    st.error("内容を入力してください。")
+                else:
+                    save_income(i_date.isoformat(), i_source.strip(), int(i_amount))
+                    st.toast("収入を記録しました 💴")
+                    st.rerun()
+            if incomes:
+                st.markdown("**最近の収入:**")
+                for i in list(reversed(incomes))[:5]:
+                    c1, c2 = st.columns([5, 1])
+                    c1.markdown(f'{i["date"]}　{i["source"]}　**{int(i["amount"]):,}円**')
+                    if c2.button("🗑", key=f'rmi_{i["id"]}'):
+                        delete_income(i["id"])
+                        st.rerun()
+
+    # ---- 固定費 ----
+    st.divider()
+    with st.expander("🔁 固定費（家賃・サブスクなど）"):
+        if load_recurrings() is None:
+            st.caption("この機能を使うには、Supabaseで recurrings テーブルの作成が必要です（PROGRESS.md 参照）")
+        else:
+            st.caption("毎月決まって出ていく支出を登録しておくと、ボタン1つで今月分をまとめて記録できます")
+            with st.form("add_recurring"):
+                r_name = st.text_input("名前（例: 家賃、Netflix、電気代）")
+                r_category = st.selectbox("分類", CATEGORIES, key="rec_cat")
+                r_amount = st.number_input("毎月の金額（円）", min_value=1, step=500, value=1000, key="rec_amt")
+                r_sub = st.form_submit_button("➕ 固定費に追加", use_container_width=True)
+            if r_sub:
+                if not r_name.strip():
+                    st.error("名前を入力してください。")
+                else:
+                    save_recurring(r_name.strip(), r_category, int(r_amount))
+                    st.toast("固定費を追加しました 🔁")
+                    st.rerun()
+
+            if recurrings:
+                rec_total = sum(int(r["amount"]) for r in recurrings)
+                st.markdown(f"**登録ずみの固定費（合計 {rec_total:,}円/月）:**")
+                for r in recurrings:
+                    c1, c2 = st.columns([5, 1])
+                    c1.markdown(f'🔁 {r["name"]}　{int(r["amount"]):,}円（{r["category"]}）')
+                    if c2.button("🗑", key=f'rmr_{r["id"]}'):
+                        delete_recurring(r["id"])
+                        st.rerun()
+
+                # 今月まだ登録していない固定費だけまとめて記録
+                already = {e.get("item") for e in expenses
+                          if period_key(e["date"]) == this_month and e.get("memo") == "固定費"}
+                not_yet = [r for r in recurrings if r["name"] not in already]
+                if not_yet:
+                    st.caption(f"今月（{period_label(this_month)}）はまだ {len(not_yet)}件の固定費が未登録です")
+                    if st.button(f"📌 今月の固定費 {len(not_yet)}件をまとめて記録", use_container_width=True, type="primary"):
+                        today = date.today().isoformat()
+                        for r in not_yet:
+                            save_expense(today, "", r["category"], r["name"], int(r["amount"]), "固定費")
+                        st.toast(f"{len(not_yet)}件の固定費を記録しました 🔁")
+                        st.rerun()
+                else:
+                    st.success("今月の固定費はすべて記録ずみです ✅")
+
 # ---- タブ: 履歴 ----
 with tab_list:
     st.subheader("支出の履歴")
@@ -536,6 +690,49 @@ with tab_chart:
         else:
             st.caption("店名つきの記録がたまると表示されます。")
 
+        # ---- 今月の日別カレンダー ----
+        st.divider()
+        st.markdown(f"##### 📅 日別カレンダー（{period_label(this_month)}）")
+        month_exp = [e for e in expenses if period_key(e["date"]) == this_month]
+        if not month_exp:
+            st.caption("今月の記録がたまると、日ごとの支出が表示されます。")
+        else:
+            by_day = {}
+            for e in month_exp:
+                d = str(e["date"])[:10]
+                by_day[d] = by_day.get(d, 0) + int(e["amount"])
+            # 週（月曜始まり）ごとに並べる
+            days_sorted = sorted(by_day)
+            start = date.fromisoformat(days_sorted[0])
+            end = date.fromisoformat(days_sorted[-1])
+            cur = start - timedelta(days=start.weekday())
+            week_labels = ["月", "火", "水", "木", "金", "土", "日"]
+            header = st.columns(7)
+            for i, wl in enumerate(week_labels):
+                header[i].markdown(f"<div style='text-align:center;color:#999;font-size:12px'>{wl}</div>", unsafe_allow_html=True)
+            while cur <= end:
+                cols = st.columns(7)
+                for i in range(7):
+                    iso = cur.isoformat()
+                    amt = by_day.get(iso, 0)
+                    if start <= cur <= end:
+                        if amt > 0:
+                            cols[i].markdown(
+                                f"<div style='text-align:center'><span style='font-size:12px;color:#999'>{cur.day}</span><br>"
+                                f"<span style='font-size:13px;font-weight:700;color:#d2691e'>{amt:,}</span></div>",
+                                unsafe_allow_html=True)
+                        else:
+                            cols[i].markdown(
+                                f"<div style='text-align:center;color:#ccc'><span style='font-size:12px'>{cur.day}</span><br>"
+                                f"<span style='font-size:13px'>—</span></div>", unsafe_allow_html=True)
+                    else:
+                        cols[i].markdown("&nbsp;", unsafe_allow_html=True)
+                    cur += timedelta(days=1)
+            # 一番使った日
+            top_day, top_amt = max(by_day.items(), key=lambda x: x[1])
+            wd = "月火水木金土日"[date.fromisoformat(top_day).weekday()]
+            st.caption(f"いちばん使った日は {top_day}（{wd}）の {top_amt:,}円 でした")
+
 # ---- タブ: AI ----
 with tab_ai:
     if os.path.exists("assets/sensei_hero.jpg"):
@@ -559,11 +756,22 @@ with tab_ai:
                     lines.append(f"  - {cat}: {int(v):,}円")
             budget_raw = load_setting("kakeibo_budget")
             budget_text = f"毎月の予算: {int(budget_raw):,}円" if budget_raw and str(budget_raw).isdigit() and int(budget_raw) > 0 else "予算は未設定"
+            inc_text = "収入の記録なし"
+            if incomes:
+                inc_lines = []
+                for m in recent_months:
+                    mi = sum(int(i["amount"]) for i in incomes if period_key(i["date"]) == m)
+                    me = int(df[df["月"] == m]["amount"].sum())
+                    inc_lines.append(f"■ {period_label(m)} 収入 {mi:,}円 / 支出 {me:,}円 / 収支 {mi - me:+,}円")
+                inc_text = chr(10).join(inc_lines)
 
             prompt = f"""あなたは「高坂先生」。親しみやすく頼れる家計の先生です。やさしい日本語で、この生徒の家計を見てあげてください。
 
 【最近の支出（月別・カテゴリ別）】
 {chr(10).join(lines)}
+
+【収支（収入と支出）】
+{inc_text}
 
 【予算】
 {budget_text}
