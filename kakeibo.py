@@ -121,11 +121,20 @@ def gemini_generate(messages: list) -> str:
     raise last_err
 
 
-def gemini_read_receipt(image_bytes: bytes, mime_type: str) -> list:
+def gemini_read_receipt(image_bytes: bytes, mime_type: str, per_item: bool = False) -> list:
     """レシートの写真をGeminiで読み取り、支出のリストにして返す"""
     from google.genai import types
 
-    prompt = f"""この画像はレシート（または支払い画面）の写真です。読み取れる支払いを抽出して、JSONだけを出力してください。
+    if per_item:
+        prompt = f"""この画像はレシートの写真です。買った商品を1つずつ抽出して、JSONだけを出力してください。
+形式: [{{"date": "YYYY-MM-DD"（不明ならnull）, "store": "店名", "category": "{'/'.join(CATEGORIES)} のどれか1つ（商品ごとに最適なもの）", "item": "商品名", "total": その商品の税込み価格の整数}}]
+注意:
+- 商品1つにつき配列の1要素にする（同じ商品が2個なら価格をまとめて1要素でよい）
+- 割引があれば価格に反映する
+- 小計・合計・消費税・ポイント・お預かり・お釣りなどの行は商品ではないので含めない
+- JSON以外の文字は一切出力しない。"""
+    else:
+        prompt = f"""この画像はレシート（または支払い画面）の写真です。読み取れる支払いを抽出して、JSONだけを出力してください。
 形式: [{{"date": "YYYY-MM-DD"（不明ならnull）, "store": "店名", "category": "{'/'.join(CATEGORIES)} のどれか1つ", "item": "主な品目を3つまで・で区切った文字列", "total": 合計金額の整数}}]
 注意: 必ず配列で出力する。合計金額は税込みの支払い総額。JSON以外の文字は一切出力しない。"""
     contents = [types.Content(role="user", parts=[
@@ -321,13 +330,22 @@ with tab_add:
     st.caption("レシートをスマホで撮って選ぶと、高坂先生が日付・店名・金額を読み取ってくれます")
     up = st.file_uploader("レシートの写真を選ぶ", type=["png", "jpg", "jpeg", "webp", "heic", "heif"],
                           label_visibility="collapsed")
+    read_mode = st.radio(
+        "記録のしかた",
+        ["🧾 合計でまとめて1件", "🛒 一品ずつ"],
+        horizontal=True,
+        help="「一品ずつ」は商品1つ1つを別の記録にして、分類も商品ごとに自動で振り分けます",
+    )
     if up is not None and st.button("📷 読み取る", use_container_width=True, type="primary"):
         if not get_config("GEMINI_API_KEY"):
             st.error("Geminiの設定がまだです（Secrets に GEMINI_API_KEY を追加してください）。")
         else:
             with st.spinner("高坂先生が読み取り中です…"):
                 try:
-                    found = gemini_read_receipt(up.getvalue(), up.type or "image/jpeg")
+                    found = gemini_read_receipt(
+                        up.getvalue(), up.type or "image/jpeg",
+                        per_item=read_mode.startswith("🛒"),
+                    )
                     if found:
                         st.session_state.scan_receipt = found
                     else:
