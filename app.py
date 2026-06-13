@@ -313,14 +313,63 @@ def normalize_code(s) -> str:
     return unicodedata.normalize("NFKC", str(s or "")).strip().upper()
 
 
+def gemini_quick(prompt: str) -> str:
+    """軽い質問用のGemini呼び出し（速いモデルのみ・検索つき→なしの順）"""
+    from google import genai
+    from google.genai import types
+
+    api_key = get_config("GEMINI_API_KEY").strip()
+    if not api_key:
+        return ""
+    factories = [
+        lambda: genai.Client(api_key=api_key),
+        lambda: genai.Client(vertexai=True, api_key=api_key),
+    ]
+    if api_key.startswith("AQ."):
+        factories.reverse()
+    search_config = types.GenerateContentConfig(
+        tools=[types.Tool(google_search=types.GoogleSearch())]
+    )
+    for make_client in factories:
+        try:
+            client = make_client()
+        except Exception:
+            continue
+        for model in ["gemini-2.5-flash", "gemini-2.0-flash"]:
+            for config in (search_config, None):
+                try:
+                    resp = client.models.generate_content(model=model, contents=prompt, config=config)
+                    if resp.text:
+                        return resp.text
+                except Exception:
+                    continue
+    return ""
+
+
 @st.cache_data(ttl=86400)
 def fetch_company_name(code: str) -> str:
-    """証券コードから会社名を調べる（見つからなければ空文字）"""
+    """証券コードから会社名を調べる（見つからなければ空文字）
+
+    1) Yahoo!ファイナンスのデータ → 2) Gemini検索 の順で探す
+    """
     try:
         info = yf.Ticker(f"{code}.T").info or {}
-        return info.get("shortName") or info.get("longName") or ""
+        name = info.get("shortName") or info.get("longName") or ""
+        if name:
+            return name
     except Exception:
-        return ""
+        pass
+    try:
+        text = gemini_quick(
+            f"日本の証券コード「{code}」で上場している企業の会社名を、日本語で会社名だけ出力してください。"
+            "「株式会社」は省略してよい。確信が持てない場合や存在しない場合は「不明」とだけ出力。"
+        )
+        name = text.strip().splitlines()[0].strip()
+        if name and "不明" not in name and len(name) <= 40:
+            return name
+    except Exception:
+        pass
+    return ""
 
 
 @st.cache_data(ttl=300)
