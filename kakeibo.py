@@ -305,21 +305,33 @@ with tab_home:
         month_exp = [e for e in expenses if period_key(e["date"]) == this_month]
         month_total = sum(int(e["amount"]) for e in month_exp)
 
+        budget_raw = load_setting("kakeibo_budget")
+        budget = int(budget_raw) if budget_raw and str(budget_raw).isdigit() else 0
+
         c1, c2 = st.columns(2)
         c1.metric(f"今月の支出（{period_label(this_month)}）", f"{month_total:,}円")
-        c2.metric("今月の記録", f"{len(month_exp)}件")
+        if budget > 0:
+            nokori = budget - month_total
+            c2.metric(
+                "💰 残り使える額",
+                f"{nokori:,}円",
+                delta=f"予算 {budget:,}円",
+                delta_color="off",
+            )
+        else:
+            c2.metric("今月の記録", f"{len(month_exp)}件")
         st.caption(f"※ 家計簿の「ひと月」は毎月{RESET_DAY}日にリセットされます")
 
         # ---- 今月の予算 ----
-        budget_raw = load_setting("kakeibo_budget")
         if budget_raw is not None:
-            budget = int(budget_raw) if str(budget_raw).isdigit() else 0
             if budget > 0:
                 pct = min(month_total / budget, 1.0)
                 nokori = budget - month_total
-                st.progress(pct, text=f"💰 今月の予算 {budget:,}円 ／ 残り {nokori:,}円")
+                st.progress(pct, text=f"💰 予算 {budget:,}円 のうち {month_total:,}円 使用（{month_total / budget * 100:.0f}%）")
                 if nokori < 0:
                     st.error(f"⚠️ 予算を {-nokori:,}円 オーバーしています！")
+                elif pct >= 0.8:
+                    st.warning(f"⚠️ 予算の8割を超えました。残り {nokori:,}円 です。")
             with st.expander("💰 毎月の予算を設定する"):
                 new_budget = st.number_input(
                     "毎月の予算（円）", min_value=0, step=5000, value=budget,
