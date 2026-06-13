@@ -338,8 +338,17 @@ with tab_home:
                     help="0にすると予算ゲージは非表示になります",
                 )
                 if st.button("予算を保存", use_container_width=True):
-                    save_setting("kakeibo_budget", str(int(new_budget)))
-                    st.rerun()
+                    try:
+                        save_setting("kakeibo_budget", str(int(new_budget)))
+                    except Exception as e:
+                        st.error(
+                            "保存に失敗しました。settings テーブルが書き込み禁止（RLS有効）に"
+                            "なっている可能性があります。SQL Editorで "
+                            "`alter table settings disable row level security;` を実行してください。"
+                        )
+                        st.code(str(e))
+                    else:
+                        st.rerun()
 
         # ---- 今月のカテゴリ別 ----
         if month_exp:

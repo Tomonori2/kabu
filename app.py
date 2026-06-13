@@ -561,8 +561,17 @@ with tab_home:
                     help="0にすると目標ゲージは非表示になります",
                 )
                 if st.button("目標を保存", use_container_width=True):
-                    save_setting("monthly_goal", str(int(new_goal)))
-                    st.rerun()
+                    try:
+                        save_setting("monthly_goal", str(int(new_goal)))
+                    except Exception as e:
+                        st.error(
+                            "保存に失敗しました。settings テーブルが書き込み禁止（RLS有効）に"
+                            "なっている可能性があります。SQL Editorで "
+                            "`alter table settings disable row level security;` を実行してください。"
+                        )
+                        st.code(str(e))
+                    else:
+                        st.rerun()
 
         c1, c2 = st.columns(2)
         c1.metric(
