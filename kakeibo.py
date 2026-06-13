@@ -319,7 +319,7 @@ with tab_home:
 with tab_add:
     st.subheader("📷 レシートを読み込む")
     st.caption("レシートをスマホで撮って選ぶと、高坂先生が日付・店名・金額を読み取ってくれます")
-    up = st.file_uploader("レシートの写真を選ぶ", type=["png", "jpg", "jpeg", "webp"],
+    up = st.file_uploader("レシートの写真を選ぶ", type=["png", "jpg", "jpeg", "webp", "heic", "heif"],
                           label_visibility="collapsed")
     if up is not None and st.button("📷 読み取る", use_container_width=True, type="primary"):
         if not get_config("GEMINI_API_KEY"):
