@@ -3,7 +3,7 @@ import hmac
 import json
 import os
 import re
-from datetime import date
+from datetime import date, timedelta
 
 import pandas as pd
 import streamlit as st
@@ -11,6 +11,26 @@ from supabase import create_client, Client
 
 CATEGORIES = ["食費", "外食", "日用品", "交通", "趣味・娯楽", "衣服・美容",
               "医療・健康", "光熱費", "通信", "その他"]
+
+RESET_DAY = 16  # 家計簿の「ひと月」はこの日に始まる（16日〜翌月15日）
+
+
+def period_key(d) -> str:
+    """16日はじまりの『家計簿月』のキーを返す（開始する月で表す。例: 2026-06 = 6/16〜7/15）"""
+    if not isinstance(d, date):
+        d = date.fromisoformat(str(d)[:10])
+    if d.day >= RESET_DAY:
+        start = d.replace(day=1)
+    else:
+        start = (d.replace(day=1) - timedelta(days=1)).replace(day=1)
+    return start.strftime("%Y-%m")
+
+
+def period_label(key: str) -> str:
+    """家計簿月のキーを「6/16〜7/15」のような表示にする"""
+    y, m = map(int, key.split("-"))
+    nm = 1 if m == 12 else m + 1
+    return f"{m}/{RESET_DAY}〜{nm}/{RESET_DAY - 1}"
 
 
 def get_config(key: str) -> str:
@@ -275,19 +295,20 @@ tab_home, tab_add, tab_list, tab_chart, tab_ai = st.tabs(
     ["🏠 ホーム", "➕ 追加", "📋 履歴", "📈 分析", "🤖 AI"]
 )
 
-this_month = date.today().strftime("%Y-%m")
+this_month = period_key(date.today())
 
 # ---- タブ: ホーム ----
 with tab_home:
     if not expenses:
         st.info("ようこそ！「➕ 追加」タブでレシートを撮って読み込むか、手入力で最初の支出を記録してみましょう。")
     else:
-        month_exp = [e for e in expenses if str(e["date"])[:7] == this_month]
+        month_exp = [e for e in expenses if period_key(e["date"]) == this_month]
         month_total = sum(int(e["amount"]) for e in month_exp)
 
         c1, c2 = st.columns(2)
-        c1.metric(f"今月の支出（{date.today().month}月）", f"{month_total:,}円")
+        c1.metric(f"今月の支出（{period_label(this_month)}）", f"{month_total:,}円")
         c2.metric("今月の記録", f"{len(month_exp)}件")
+        st.caption(f"※ 家計簿の「ひと月」は毎月{RESET_DAY}日にリセットされます")
 
         # ---- 今月の予算 ----
         budget_raw = load_setting("kakeibo_budget")
@@ -454,16 +475,17 @@ with tab_chart:
         st.info("まだ記録がありません。")
     else:
         df = pd.DataFrame(expenses)
-        df["月"] = df["date"].astype(str).str[:7]
+        df["月"] = df["date"].apply(period_key)
 
         st.markdown("##### 🗓 月別の支出")
         monthly = df.groupby("月")["amount"].sum()
         st.bar_chart(monthly, use_container_width=True)
         month_rows = [
-            {"月": m, "支出": f"{int(v):,}円"}
+            {"月": m, "期間": period_label(m), "支出": f"{int(v):,}円"}
             for m, v in monthly.sort_index(ascending=False).items()
         ]
         st.dataframe(month_rows, use_container_width=True, hide_index=True)
+        st.caption(f"※ 月は{RESET_DAY}日はじまり（{RESET_DAY}日〜翌月{RESET_DAY - 1}日）で区切っています")
 
         st.markdown("##### 🧺 カテゴリ別（全期間）")
         by_cat = df.groupby("category")["amount"].sum().sort_values(ascending=False)
@@ -491,12 +513,12 @@ with tab_ai:
             st.error("まだ支出の記録がありません。")
         else:
             df = pd.DataFrame(expenses)
-            df["月"] = df["date"].astype(str).str[:7]
+            df["月"] = df["date"].apply(period_key)
             recent_months = sorted(df["月"].unique())[-2:]
             lines = []
             for m in recent_months:
                 dfm = df[df["月"] == m]
-                lines.append(f"■ {m} 合計 {int(dfm['amount'].sum()):,}円")
+                lines.append(f"■ {period_label(m)} 合計 {int(dfm['amount'].sum()):,}円")
                 for cat, v in dfm.groupby("category")["amount"].sum().sort_values(ascending=False).items():
                     lines.append(f"  - {cat}: {int(v):,}円")
             budget_raw = load_setting("kakeibo_budget")
