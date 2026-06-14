@@ -348,6 +348,8 @@ tab_home, tab_add, tab_list, tab_chart, tab_ai = st.tabs(
 
 # ---- タブ: ホーム ----
 with tab_home:
+    if os.path.exists("assets/hero.jpg"):
+        st.image("assets/hero.jpg", use_container_width=True)
     if not expenses:
         st.info("ようこそ！「➕ 追加」タブでレシートを撮って読み込むか、手入力で最初の支出を記録してみましょう。")
     else:
